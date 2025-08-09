@@ -1,60 +1,75 @@
-import React, { useEffect, useState } from 'react';
-import { ethers } from 'ethers';
+import React, { useState } from 'react';
+import { createWallet, importWallet } from '../core/wallet';
+
+type View = 'home' | 'created' | 'import' | 'imported';
 
 const Popup: React.FC = () => {
-  const [address, setAddress] = useState<string>('');
-  const [balance, setBalance] = useState<string>('');
-  const [recipient, setRecipient] = useState('');
-  const [amount, setAmount] = useState('');
+  const [view, setView] = useState<View>('home');
+  const [mnemonic, setMnemonic] = useState('');
+  const [address, setAddress] = useState('');
+  const [inputMnemonic, setInputMnemonic] = useState('');
 
-  useEffect(() => {
-    async function load() {
-      if ((window as any).ethereum) {
-        const provider = new ethers.BrowserProvider((window as any).ethereum);
-        const accounts = await provider.send('eth_requestAccounts', []);
-        if (accounts.length > 0) {
-          setAddress(accounts[0]);
-          const bal = await provider.getBalance(accounts[0]);
-          setBalance(ethers.formatEther(bal));
-        }
-      }
+  const handleCreate = () => {
+    const w = createWallet();
+    setMnemonic(w.mnemonic);
+    setAddress(w.address);
+    setView('created');
+  };
+
+  const handleImport = () => {
+    try {
+      const w = importWallet(inputMnemonic);
+      setMnemonic(w.mnemonic);
+      setAddress(w.address);
+      setView('imported');
+    } catch (err) {
+      alert('Invalid mnemonic');
     }
-    load();
-  }, []);
+  };
 
-  const sendTransaction = async () => {
-    if (!recipient || !amount) return;
-    const provider = new ethers.BrowserProvider((window as any).ethereum);
-    const signer = await provider.getSigner();
-    await signer.sendTransaction({
-      to: recipient,
-      value: ethers.parseEther(amount),
-    });
+  const backHome = () => {
+    setView('home');
+    setMnemonic('');
+    setAddress('');
+    setInputMnemonic('');
   };
 
   return (
     <div style={{ padding: '1rem', width: 300 }}>
       <h1>LuckYou Wallet</h1>
-      <p><strong>Address:</strong> {address}</p>
-      <p><strong>Balance:</strong> {balance} ETH</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <input
-          type="text"
-          placeholder="Recipient"
-          value={recipient}
-          onChange={(e) => setRecipient(e.target.value)}
-        />
-        <input
-          type="text"
-          placeholder="Amount in ETH"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-        />
-        <button onClick={sendTransaction}>Send</button>
-      </div>
+      {view === 'home' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <button onClick={handleCreate}>Create Wallet</button>
+          <button onClick={() => setView('import')}>Import Wallet</button>
+        </div>
+      )}
+      {view === 'created' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <p><strong>Mnemonic:</strong> {mnemonic}</p>
+          <p><strong>Address:</strong> {address}</p>
+          <button onClick={backHome}>Back</button>
+        </div>
+      )}
+      {view === 'import' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <textarea
+            placeholder="Enter mnemonic"
+            value={inputMnemonic}
+            onChange={(e) => setInputMnemonic(e.target.value)}
+            style={{ width: '100%' }}
+          />
+          <button onClick={handleImport}>Import</button>
+          <button onClick={backHome}>Cancel</button>
+        </div>
+      )}
+      {view === 'imported' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <p><strong>Address:</strong> {address}</p>
+          <button onClick={backHome}>Back</button>
+        </div>
+      )}
     </div>
   );
 };
 
 export default Popup;
-
