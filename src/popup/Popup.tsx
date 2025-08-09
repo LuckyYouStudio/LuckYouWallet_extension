@@ -1,11 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createWallet, importWallet, encryptWallet, decryptWallet, WalletInfo, getEthBalance } from '../core/wallet';
+import {
+  createWallet,
+  importWallet,
+  encryptWallet,
+  decryptWallet,
+  WalletInfo,
+  getEthBalance,
+  NETWORKS,
+  NetworkKey,
+} from '../core/wallet';
 
 type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet';
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
 const SESSION_TTL = 5 * 60 * 1000; // 5 minutes
+const NETWORK_STORAGE_KEY = 'selectedNetwork';
 
 interface StoredWallet {
   source: 'created' | 'imported';
@@ -28,6 +38,7 @@ const Popup: React.FC = () => {
   const [unlockPassword, setUnlockPassword] = useState('');
   const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
   const [balance, setBalance] = useState('');
+  const [network, setNetwork] = useState<NetworkKey>('mainnet');
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
 
   const clearLogoutTimer = () => {
@@ -82,6 +93,13 @@ const Popup: React.FC = () => {
         console.error('Failed to parse stored wallet', e);
         localStorage.removeItem(STORAGE_KEY);
       }
+    }
+  }, []);
+
+  useEffect(() => {
+    const storedNetwork = localStorage.getItem(NETWORK_STORAGE_KEY) as NetworkKey | null;
+    if (storedNetwork && NETWORKS[storedNetwork]) {
+      setNetwork(storedNetwork);
     }
   }, []);
 
@@ -146,6 +164,12 @@ const Popup: React.FC = () => {
     }
   };
 
+  const handleNetworkChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value as NetworkKey;
+    setNetwork(value);
+    localStorage.setItem(NETWORK_STORAGE_KEY, value);
+  };
+
   const backHome = () => {
     setView('home');
     setWalletInfo(null);
@@ -168,7 +192,7 @@ const Popup: React.FC = () => {
 
   useEffect(() => {
     if (walletInfo?.address) {
-      getEthBalance(walletInfo.address)
+      getEthBalance(walletInfo.address, network)
         .then((b) => setBalance(parseFloat(b).toFixed(4)))
         .catch((e) => {
           console.error('Failed to fetch balance', e);
@@ -177,11 +201,21 @@ const Popup: React.FC = () => {
     } else {
       setBalance('');
     }
-  }, [walletInfo]);
+  }, [walletInfo, network]);
 
   return (
     <div style={{ padding: '1rem', width: 300 }}>
       <h1>LuckYou Wallet</h1>
+      <div style={{ marginBottom: '0.5rem' }}>
+        <label>
+          Network:
+          <select value={network} onChange={handleNetworkChange} style={{ marginLeft: '0.5rem' }}>
+            {Object.entries(NETWORKS).map(([key, { name }]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
       {view === 'home' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <button onClick={handleCreate}>Create Wallet</button>
