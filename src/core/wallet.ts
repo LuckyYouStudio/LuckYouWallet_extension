@@ -78,26 +78,40 @@ export async function getTransactionHistory(
   network: NetworkKey,
 ): Promise<TransactionRecord[]> {
   const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
-  const latest = await provider.getBlockNumber();
-  const start = Math.max(latest - 100, 0);
   const records: TransactionRecord[] = [];
+  let latest: number;
+  try {
+    latest = await provider.getBlockNumber();
+  } catch {
+    return records;
+  }
+  const start = Math.max(latest - 100, 0);
+  const target = address.toLowerCase();
   for (let i = latest; i >= start; i--) {
-    const block = await provider.getBlock(i, true);
+    let block;
+    try {
+      block = await provider.getBlockWithTransactions(i);
+    } catch {
+      continue;
+    }
     if (!block) continue;
-    for (const txHash of block.transactions) {
-      const tx = await provider.getTransaction(txHash);
-      if (!tx) continue;
+    for (const tx of block.transactions) {
       const from = tx.from.toLowerCase();
       const toAddr = (tx.to || '').toLowerCase();
-      const target = address.toLowerCase();
       if (from === target || toAddr === target) {
-        const receipt = await provider.getTransactionReceipt(tx.hash);
+        let status = 0;
+        try {
+          const receipt = await provider.getTransactionReceipt(tx.hash);
+          status = Number(receipt?.status ?? 0);
+        } catch {
+          status = 0;
+        }
         records.push({
           hash: tx.hash,
           from: tx.from,
           to: tx.to || '',
           value: formatEther(tx.value),
-          status: receipt?.status ?? 0,
+          status,
         });
       }
     }
