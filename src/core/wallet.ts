@@ -84,7 +84,9 @@ export async function getTransactionHistory(
   for (let i = latest; i >= start; i--) {
     const block = await provider.getBlock(i, true);
     if (!block) continue;
-    for (const tx of block.transactions) {
+    for (const txHash of block.transactions) {
+      const tx = await provider.getTransaction(txHash);
+      if (!tx) continue;
       const from = tx.from.toLowerCase();
       const toAddr = (tx.to || '').toLowerCase();
       const target = address.toLowerCase();
