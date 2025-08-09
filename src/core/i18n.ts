@@ -1,0 +1,41 @@
+export const translations = {
+  en: {
+    title: 'LuckYou Wallet',
+    network: 'Network:',
+    createWallet: 'Create Wallet',
+    importWallet: 'Import Wallet',
+    import: 'Import',
+    cancel: 'Cancel',
+    save: 'Save',
+    unlock: 'Unlock',
+    clearWallet: 'Clear Wallet',
+    sendETH: 'Send ETH',
+    activity: 'Activity',
+    logout: 'Logout',
+    send: 'Send',
+    sending: 'Sending...',
+    back: 'Back',
+    noTransactions: 'No sent transactions',
+  },
+  zh: {
+    title: 'LuckYou 钱包',
+    network: '网络:',
+    createWallet: '创建钱包',
+    importWallet: '导入钱包',
+    import: '导入',
+    cancel: '取消',
+    save: '保存',
+    unlock: '解锁',
+    clearWallet: '清除钱包',
+    sendETH: '发送 ETH',
+    activity: '交易记录',
+    logout: '退出',
+    send: '发送',
+    sending: '发送中...',
+    back: '返回',
+    noTransactions: '无发送交易',
+  },
+} as const;
+
+export type Lang = keyof typeof translations;
+export type TranslationKey = keyof typeof translations['en'];

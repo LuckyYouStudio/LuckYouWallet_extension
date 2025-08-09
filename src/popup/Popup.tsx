@@ -13,6 +13,7 @@ import {
   NetworkKey,
 } from '../core/wallet';
 import Activity from './Activity';
+import { translations, Lang, TranslationKey } from '../core/i18n';
 
 type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet' | 'send' | 'activity';
 
@@ -20,6 +21,7 @@ const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
 const SESSION_TTL = 5 * 60 * 1000; // 5 minutes
 const NETWORK_STORAGE_KEY = 'selectedNetwork';
+const LANGUAGE_STORAGE_KEY = 'language';
 
 interface StoredWallet {
   source: 'created' | 'imported';
@@ -47,6 +49,8 @@ const Popup: React.FC = () => {
   const [amount, setAmount] = useState('');
   const [history, setHistory] = useState<TransactionRecord[]>([]);
   const [sending, setSending] = useState(false);
+  const [lang, setLang] = useState<Lang>((): Lang => (localStorage.getItem(LANGUAGE_STORAGE_KEY) as Lang) || 'en');
+  const t = (key: TranslationKey) => translations[lang][key];
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
 
   const clearLogoutTimer = () => {
@@ -61,6 +65,11 @@ const Popup: React.FC = () => {
     localStorage.removeItem(SESSION_KEY);
     setWalletInfo(null);
     setView('unlock');
+  };
+
+  const switchLang = (l: Lang) => {
+    setLang(l);
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, l);
   };
 
   const startSessionTimer = (ms: number) => {
@@ -110,6 +119,11 @@ const Popup: React.FC = () => {
       setNetwork(storedNetwork);
     }
   }, []);
+
+  useEffect(() => {
+    document.title = translations[lang].title;
+    document.documentElement.lang = lang;
+  }, [lang]);
 
   const saveSession = (info: WalletInfo, src: 'created' | 'imported') => {
     const session: WalletSession = {
@@ -241,10 +255,14 @@ const Popup: React.FC = () => {
 
   return (
     <div style={{ padding: '1rem', width: 300 }}>
-      <h1>LuckYou Wallet</h1>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+        <button onClick={() => switchLang('en')}>EN</button>
+        <button onClick={() => switchLang('zh')}>中文</button>
+      </div>
+      <h1>{t('title')}</h1>
       <div style={{ marginBottom: '0.5rem' }}>
         <label>
-          Network:
+          {t('network')}
           <select value={network} onChange={handleNetworkChange} style={{ marginLeft: '0.5rem' }}>
             {Object.entries(NETWORKS).map(([key, { name }]) => (
               <option key={key} value={key}>{name}</option>
@@ -254,8 +272,8 @@ const Popup: React.FC = () => {
       </div>
       {view === 'home' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <button onClick={handleCreate}>Create Wallet</button>
-          <button onClick={() => setView('import')}>Import Wallet</button>
+          <button onClick={handleCreate}>{t('createWallet')}</button>
+          <button onClick={() => setView('import')}>{t('importWallet')}</button>
         </div>
       )}
       {view === 'import' && (
@@ -266,8 +284,8 @@ const Popup: React.FC = () => {
             onChange={(e) => setInputMnemonic(e.target.value)}
             style={{ width: '100%' }}
           />
-          <button onClick={handleImport}>Import</button>
-          <button onClick={backHome}>Cancel</button>
+          <button onClick={handleImport}>{t('import')}</button>
+          <button onClick={backHome}>{t('cancel')}</button>
         </div>
       )}
       {view === 'setPassword' && (
@@ -288,8 +306,8 @@ const Popup: React.FC = () => {
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
           />
-          <button onClick={handleSetPassword}>Save</button>
-          <button onClick={backHome}>Cancel</button>
+          <button onClick={handleSetPassword}>{t('save')}</button>
+          <button onClick={backHome}>{t('cancel')}</button>
         </div>
       )}
       {view === 'unlock' && (
@@ -300,8 +318,8 @@ const Popup: React.FC = () => {
             value={unlockPassword}
             onChange={(e) => setUnlockPassword(e.target.value)}
           />
-          <button onClick={handleUnlock}>Unlock</button>
-          <button onClick={clearWallet}>Clear Wallet</button>
+          <button onClick={handleUnlock}>{t('unlock')}</button>
+          <button onClick={clearWallet}>{t('clearWallet')}</button>
         </div>
       )}
       {view === 'wallet' && (
@@ -311,9 +329,9 @@ const Popup: React.FC = () => {
           )}
           <p><strong>Address:</strong> {walletInfo?.address}</p>
           <p><strong>Balance:</strong> {balance} ETH</p>
-          <button onClick={() => setView('send')}>Send ETH</button>
-          <button onClick={() => setView('activity')}>Activity</button>
-          <button onClick={logout}>Logout</button>
+          <button onClick={() => setView('send')}>{t('sendETH')}</button>
+          <button onClick={() => setView('activity')}>{t('activity')}</button>
+          <button onClick={logout}>{t('logout')}</button>
         </div>
       )}
       {view === 'send' && (
@@ -328,9 +346,9 @@ const Popup: React.FC = () => {
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
-          <button onClick={handleSend} disabled={sending}>Send</button>
-          {sending && <p>Sending...</p>}
-          <button onClick={() => setView('wallet')}>Cancel</button>
+          <button onClick={handleSend} disabled={sending}>{t('send')}</button>
+          {sending && <p>{t('sending')}</p>}
+          <button onClick={() => setView('wallet')}>{t('cancel')}</button>
         </div>
       )}
       {view === 'activity' && walletInfo && (
@@ -338,6 +356,7 @@ const Popup: React.FC = () => {
           records={history}
           wallet={walletInfo}
           onBack={() => setView('wallet')}
+          t={t}
         />
       )}
     </div>
