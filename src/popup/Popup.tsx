@@ -12,8 +12,9 @@ import {
   NETWORKS,
   NetworkKey,
 } from '../core/wallet';
+import Activity from './Activity';
 
-type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet' | 'send';
+type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet' | 'send' | 'activity';
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
@@ -310,22 +311,8 @@ const Popup: React.FC = () => {
           <p><strong>Address:</strong> {walletInfo?.address}</p>
           <p><strong>Balance:</strong> {balance} ETH</p>
           <button onClick={() => setView('send')}>Send ETH</button>
+          <button onClick={() => setView('activity')}>Activity</button>
           <button onClick={logout}>Logout</button>
-          {history.length > 0 && (
-            <div>
-              <h3>History</h3>
-              <ul style={{ maxHeight: '100px', overflowY: 'auto', paddingLeft: '1rem' }}>
-                {history.map((h) => {
-                  const isSend = h.from.toLowerCase() === walletInfo?.address.toLowerCase();
-                  return (
-                    <li key={h.hash}>
-                      {isSend ? 'Sent' : 'Received'} {h.value} ETH {isSend ? `to ${h.to}` : `from ${h.from}`} ({h.status === 1 ? 'Success' : 'Fail'})
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
         </div>
       )}
       {view === 'send' && (
@@ -344,6 +331,13 @@ const Popup: React.FC = () => {
           {sending && <p>Sending...</p>}
           <button onClick={() => setView('wallet')}>Cancel</button>
         </div>
+      )}
+      {view === 'activity' && walletInfo && (
+        <Activity
+          records={history}
+          wallet={walletInfo}
+          onBack={() => setView('wallet')}
+        />
       )}
     </div>
   );
