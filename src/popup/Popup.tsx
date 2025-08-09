@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createWallet, importWallet, encryptWallet, decryptWallet, WalletInfo } from '../core/wallet';
+import { createWallet, importWallet, encryptWallet, decryptWallet, WalletInfo, getEthBalance } from '../core/wallet';
 
 type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet';
 
@@ -27,6 +27,7 @@ const Popup: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [unlockPassword, setUnlockPassword] = useState('');
   const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
+  const [balance, setBalance] = useState('');
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
 
   const clearLogoutTimer = () => {
@@ -154,6 +155,7 @@ const Popup: React.FC = () => {
     setConfirmPassword('');
     setUnlockPassword('');
     setEncryptedWallet(null);
+    setBalance('');
     clearLogoutTimer();
     localStorage.removeItem(SESSION_KEY);
   };
@@ -163,6 +165,19 @@ const Popup: React.FC = () => {
     localStorage.removeItem(SESSION_KEY);
     backHome();
   };
+
+  useEffect(() => {
+    if (walletInfo?.address) {
+      getEthBalance(walletInfo.address)
+        .then((b) => setBalance(parseFloat(b).toFixed(4)))
+        .catch((e) => {
+          console.error('Failed to fetch balance', e);
+          setBalance('');
+        });
+    } else {
+      setBalance('');
+    }
+  }, [walletInfo]);
 
   return (
     <div style={{ padding: '1rem', width: 300 }}>
@@ -225,6 +240,7 @@ const Popup: React.FC = () => {
             <p><strong>Mnemonic:</strong> {walletInfo?.mnemonic}</p>
           )}
           <p><strong>Address:</strong> {walletInfo?.address}</p>
+          <p><strong>Balance:</strong> {balance} ETH</p>
           <button onClick={logout}>Logout</button>
         </div>
       )}
