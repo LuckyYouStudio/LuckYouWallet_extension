@@ -1,4 +1,4 @@
-import { Wallet, JsonRpcProvider, formatEther } from 'ethers';
+import { Wallet, JsonRpcProvider, formatEther, parseEther } from 'ethers';
 
 export const NETWORKS = {
   mainnet: {
@@ -47,4 +47,16 @@ export async function getEthBalance(address: string, network: NetworkKey): Promi
   const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
   const balance = await provider.getBalance(address);
   return formatEther(balance);
+}
+
+export async function sendEth(
+  mnemonic: string,
+  to: string,
+  amountEth: string,
+  network: NetworkKey,
+): Promise<string> {
+  const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
+  const wallet = Wallet.fromPhrase(mnemonic.trim()).connect(provider);
+  const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth) });
+  return tx.hash;
 }

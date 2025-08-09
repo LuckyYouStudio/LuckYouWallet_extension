@@ -6,11 +6,12 @@ import {
   decryptWallet,
   WalletInfo,
   getEthBalance,
+  sendEth,
   NETWORKS,
   NetworkKey,
 } from '../core/wallet';
 
-type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet';
+type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet' | 'send';
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
@@ -39,6 +40,8 @@ const Popup: React.FC = () => {
   const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
   const [balance, setBalance] = useState('');
   const [network, setNetwork] = useState<NetworkKey>('mainnet');
+  const [toAddress, setToAddress] = useState('');
+  const [amount, setAmount] = useState('');
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
 
   const clearLogoutTimer = () => {
@@ -170,6 +173,21 @@ const Popup: React.FC = () => {
     localStorage.setItem(NETWORK_STORAGE_KEY, value);
   };
 
+  const handleSend = async () => {
+    if (!walletInfo) return;
+    try {
+      const hash = await sendEth(walletInfo.mnemonic, toAddress, amount, network);
+      alert(`Transaction sent: ${hash}`);
+      const newBalance = await getEthBalance(walletInfo.address, network);
+      setBalance(parseFloat(newBalance).toFixed(4));
+      setToAddress('');
+      setAmount('');
+      setView('wallet');
+    } catch (e) {
+      alert('Failed to send transaction');
+    }
+  };
+
   const backHome = () => {
     setView('home');
     setWalletInfo(null);
@@ -275,7 +293,24 @@ const Popup: React.FC = () => {
           )}
           <p><strong>Address:</strong> {walletInfo?.address}</p>
           <p><strong>Balance:</strong> {balance} ETH</p>
+          <button onClick={() => setView('send')}>Send ETH</button>
           <button onClick={logout}>Logout</button>
+        </div>
+      )}
+      {view === 'send' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <input
+            placeholder="Recipient Address"
+            value={toAddress}
+            onChange={(e) => setToAddress(e.target.value)}
+          />
+          <input
+            placeholder="Amount (ETH)"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+          <button onClick={handleSend}>Send</button>
+          <button onClick={() => setView('wallet')}>Cancel</button>
         </div>
       )}
     </div>
