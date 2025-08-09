@@ -1,5 +1,22 @@
 import { Wallet, JsonRpcProvider, formatEther } from 'ethers';
 
+export const NETWORKS = {
+  mainnet: {
+    name: 'Mainnet',
+    rpcUrl: 'https://eth.llamarpc.com',
+  },
+  sepolia: {
+    name: 'Sepolia Testnet',
+    rpcUrl: 'https://ethereum-sepolia.publicnode.com',
+  },
+  polygon: {
+    name: 'Polygon',
+    rpcUrl: 'https://polygon.llamarpc.com',
+  },
+} as const;
+
+export type NetworkKey = keyof typeof NETWORKS;
+
 export interface WalletInfo {
   mnemonic: string;
   address: string;
@@ -26,8 +43,8 @@ export async function decryptWallet(encryptedJson: string, password: string): Pr
   return { mnemonic: wallet.mnemonic?.phrase || '', address: wallet.address };
 }
 
-export async function getEthBalance(address: string): Promise<string> {
-  const provider = new JsonRpcProvider('https://eth.llamarpc.com');
+export async function getEthBalance(address: string, network: NetworkKey): Promise<string> {
+  const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
   const balance = await provider.getBalance(address);
   return formatEther(balance);
 }
