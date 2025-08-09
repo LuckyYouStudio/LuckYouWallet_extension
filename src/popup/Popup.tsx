@@ -183,7 +183,8 @@ const Popup: React.FC = () => {
     try {
       setSending(true);
       const { hash, status } = await sendEth(walletInfo.mnemonic, toAddress, amount, network);
-      alert(status === 1 ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
+      const success = Number(status) === 1;
+      alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
       const newBalance = await getEthBalance(walletInfo.address, network);
       setBalance(parseFloat(newBalance).toFixed(4));
       const txHistory = await getTransactionHistory(walletInfo.address, network);

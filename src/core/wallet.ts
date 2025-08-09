@@ -67,7 +67,10 @@ export async function sendEth(
   const wallet = Wallet.fromPhrase(mnemonic.trim()).connect(provider);
   const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth) });
   const receipt = await tx.wait();
-  return { hash: receipt.hash, status: receipt.status ?? 0 };
+  // Ethers may return the status as a bigint or null, so normalize to a
+  // simple number (1 for success, 0 for failure) for easier checks in the UI.
+  const status = Number(receipt.status ?? 0);
+  return { hash: receipt.hash, status };
 }
 
 export async function getTransactionHistory(
