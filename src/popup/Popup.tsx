@@ -57,6 +57,8 @@ const Popup: React.FC = () => {
           setSource(w.source);
           setView('unlock');
         }
+        setSource(w.source);
+        setView('unlock');
       } catch (e) {
         console.error('Failed to parse stored wallet', e);
         localStorage.removeItem(STORAGE_KEY);
