@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createWallet, importWallet, encryptWallet, decryptWallet, WalletInfo } from '../core/wallet';
 
 type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet';
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
-const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_TTL = 5 * 60 * 1000; // 5 minutes
 
 interface StoredWallet {
   source: 'created' | 'imported';
@@ -27,6 +27,26 @@ const Popup: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [unlockPassword, setUnlockPassword] = useState('');
   const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
+  const logoutTimer = useRef<NodeJS.Timeout | null>(null);
+
+  const clearLogoutTimer = () => {
+    if (logoutTimer.current) {
+      clearTimeout(logoutTimer.current);
+      logoutTimer.current = null;
+    }
+  };
+
+  const logout = () => {
+    clearLogoutTimer();
+    localStorage.removeItem(SESSION_KEY);
+    setWalletInfo(null);
+    setView('unlock');
+  };
+
+  const startSessionTimer = (ms: number) => {
+    clearLogoutTimer();
+    logoutTimer.current = setTimeout(logout, ms);
+  };
 
   useEffect(() => {
     let sessionValid = false;
@@ -34,11 +54,13 @@ const Popup: React.FC = () => {
     if (sessionRaw) {
       try {
         const s: WalletSession = JSON.parse(sessionRaw);
-        if (Date.now() - s.timestamp < SESSION_TTL) {
+        const elapsed = Date.now() - s.timestamp;
+        if (elapsed < SESSION_TTL) {
           setWalletInfo(s.info);
           setSource(s.source);
           setView('wallet');
           sessionValid = true;
+          startSessionTimer(SESSION_TTL - elapsed);
         } else {
           localStorage.removeItem(SESSION_KEY);
         }
@@ -49,14 +71,10 @@ const Popup: React.FC = () => {
     }
 
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
+    if (stored && !sessionValid) {
       try {
         const w: StoredWallet = JSON.parse(stored);
         setEncryptedWallet(w.encrypted);
-        if (!sessionValid) {
-          setSource(w.source);
-          setView('unlock');
-        }
         setSource(w.source);
         setView('unlock');
       } catch (e) {
@@ -73,6 +91,7 @@ const Popup: React.FC = () => {
       timestamp: Date.now(),
     };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    startSessionTimer(SESSION_TTL);
   };
 
   const handleCreate = () => {
@@ -135,6 +154,7 @@ const Popup: React.FC = () => {
     setConfirmPassword('');
     setUnlockPassword('');
     setEncryptedWallet(null);
+    clearLogoutTimer();
     localStorage.removeItem(SESSION_KEY);
   };
 
@@ -142,12 +162,6 @@ const Popup: React.FC = () => {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(SESSION_KEY);
     backHome();
-  };
-
-  const logout = () => {
-    localStorage.removeItem(SESSION_KEY);
-    setWalletInfo(null);
-    setView('unlock');
   };
 
   return (
