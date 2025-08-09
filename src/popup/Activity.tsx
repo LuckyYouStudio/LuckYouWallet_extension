@@ -1,22 +1,24 @@
 import React from 'react';
 import { TransactionRecord, WalletInfo } from '../core/wallet';
+import { TranslationKey } from '../core/i18n';
 
 interface ActivityProps {
   records: TransactionRecord[];
   wallet: WalletInfo;
   onBack: () => void;
+  t: (key: TranslationKey) => string;
 }
 
-const Activity: React.FC<ActivityProps> = ({ records, wallet, onBack }) => {
+const Activity: React.FC<ActivityProps> = ({ records, wallet, onBack, t }) => {
   const address = wallet.address.toLowerCase();
   const sent = records.filter((r) => r.from.toLowerCase() === address);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <button onClick={onBack}>Back</button>
-      <h3>Activity</h3>
+      <button onClick={onBack}>{t('back')}</button>
+      <h3>{t('activity')}</h3>
       {sent.length === 0 ? (
-        <p>No sent transactions</p>
+        <p>{t('noTransactions')}</p>
       ) : (
         <ul style={{ maxHeight: '150px', overflowY: 'auto', paddingLeft: '1rem' }}>
           {sent.map((r) => (
