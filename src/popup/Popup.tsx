@@ -1,27 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { createWallet, importWallet, WalletInfo } from '../core/wallet';
+import { createWallet, importWallet, encryptWallet, decryptWallet, WalletInfo } from '../core/wallet';
 
-type View = 'home' | 'created' | 'import' | 'imported';
+type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet';
 
-const STORAGE_KEY = 'currentWallet';
-interface StoredWallet extends WalletInfo {
+const STORAGE_KEY = 'encryptedWallet';
+
+interface StoredWallet {
   source: 'created' | 'imported';
+  encrypted: string;
 }
 
 const Popup: React.FC = () => {
   const [view, setView] = useState<View>('home');
-  const [mnemonic, setMnemonic] = useState('');
-  const [address, setAddress] = useState('');
+  const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
+  const [source, setSource] = useState<'created' | 'imported' | null>(null);
   const [inputMnemonic, setInputMnemonic] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       try {
         const w: StoredWallet = JSON.parse(stored);
-        setMnemonic(w.mnemonic);
-        setAddress(w.address);
-        setView(w.source);
+        setEncryptedWallet(w.encrypted);
+        setSource(w.source);
+        setView('unlock');
       } catch (e) {
         console.error('Failed to parse stored wallet', e);
         localStorage.removeItem(STORAGE_KEY);
@@ -31,36 +37,72 @@ const Popup: React.FC = () => {
 
   const handleCreate = () => {
     const w = createWallet();
-    setMnemonic(w.mnemonic);
-    setAddress(w.address);
-    setView('created');
-    const stored: StoredWallet = { ...w, source: 'created' };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    setWalletInfo(w);
+    setSource('created');
+    setView('setPassword');
   };
 
   const handleImport = () => {
     try {
       const w = importWallet(inputMnemonic);
-      setMnemonic(w.mnemonic);
-      setAddress(w.address);
-      setView('imported');
-      const stored: StoredWallet = { ...w, source: 'imported' };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+      setWalletInfo(w);
+      setSource('imported');
+      setView('setPassword');
     } catch (err) {
       alert('Invalid mnemonic');
     }
   };
 
+  const handleSetPassword = async () => {
+    if (!walletInfo || !source) return;
+    if (password !== confirmPassword) {
+      alert('Passwords do not match');
+      return;
+    }
+    try {
+      const encrypted = await encryptWallet(walletInfo.mnemonic, password);
+      const stored: StoredWallet = { source, encrypted };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+      setEncryptedWallet(encrypted);
+      setPassword('');
+      setConfirmPassword('');
+      setView('wallet');
+    } catch (e) {
+      console.error('Failed to encrypt wallet', e);
+    }
+  };
+
+  const handleUnlock = async () => {
+    if (!encryptedWallet) return;
+    try {
+      const w = await decryptWallet(encryptedWallet, unlockPassword);
+      setWalletInfo(w);
+      setUnlockPassword('');
+      setView('wallet');
+    } catch (e) {
+      alert('Invalid password');
+    }
+  };
+
   const backHome = () => {
     setView('home');
-    setMnemonic('');
-    setAddress('');
+    setWalletInfo(null);
+    setSource(null);
     setInputMnemonic('');
+    setPassword('');
+    setConfirmPassword('');
+    setUnlockPassword('');
+    setEncryptedWallet(null);
+  };
+
+  const clearWallet = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    backHome();
   };
 
   const logout = () => {
-    localStorage.removeItem(STORAGE_KEY);
-    backHome();
+    setWalletInfo(null);
+    setView('unlock');
   };
 
   return (
@@ -70,13 +112,6 @@ const Popup: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <button onClick={handleCreate}>Create Wallet</button>
           <button onClick={() => setView('import')}>Import Wallet</button>
-        </div>
-      )}
-      {view === 'created' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <p><strong>Mnemonic:</strong> {mnemonic}</p>
-          <p><strong>Address:</strong> {address}</p>
-          <button onClick={logout}>Logout</button>
         </div>
       )}
       {view === 'import' && (
@@ -91,9 +126,46 @@ const Popup: React.FC = () => {
           <button onClick={backHome}>Cancel</button>
         </div>
       )}
-      {view === 'imported' && (
+      {view === 'setPassword' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <p><strong>Address:</strong> {address}</p>
+          {source === 'created' && (
+            <p><strong>Mnemonic:</strong> {walletInfo?.mnemonic}</p>
+          )}
+          <p><strong>Address:</strong> {walletInfo?.address}</p>
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <input
+            type="password"
+            placeholder="Confirm Password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+          />
+          <button onClick={handleSetPassword}>Save</button>
+          <button onClick={backHome}>Cancel</button>
+        </div>
+      )}
+      {view === 'unlock' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <input
+            type="password"
+            placeholder="Password"
+            value={unlockPassword}
+            onChange={(e) => setUnlockPassword(e.target.value)}
+          />
+          <button onClick={handleUnlock}>Unlock</button>
+          <button onClick={clearWallet}>Clear Wallet</button>
+        </div>
+      )}
+      {view === 'wallet' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {source === 'created' && (
+            <p><strong>Mnemonic:</strong> {walletInfo?.mnemonic}</p>
+          )}
+          <p><strong>Address:</strong> {walletInfo?.address}</p>
           <button onClick={logout}>Logout</button>
         </div>
       )}
