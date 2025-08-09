@@ -15,3 +15,13 @@ export function importWallet(mnemonic: string): WalletInfo {
   const wallet = Wallet.fromPhrase(mnemonic.trim());
   return { mnemonic: wallet.mnemonic?.phrase || '', address: wallet.address };
 }
+
+export async function encryptWallet(mnemonic: string, password: string): Promise<string> {
+  const wallet = Wallet.fromPhrase(mnemonic.trim());
+  return wallet.encrypt(password);
+}
+
+export async function decryptWallet(encryptedJson: string, password: string): Promise<WalletInfo> {
+  const wallet = await Wallet.fromEncryptedJson(encryptedJson, password);
+  return { mnemonic: wallet.mnemonic?.phrase || '', address: wallet.address };
+}
