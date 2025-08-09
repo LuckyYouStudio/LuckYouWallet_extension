@@ -7,6 +7,8 @@ import {
   WalletInfo,
   getEthBalance,
   sendEth,
+  getTransactionHistory,
+  TransactionRecord,
   NETWORKS,
   NetworkKey,
 } from '../core/wallet';
@@ -42,6 +44,8 @@ const Popup: React.FC = () => {
   const [network, setNetwork] = useState<NetworkKey>('mainnet');
   const [toAddress, setToAddress] = useState('');
   const [amount, setAmount] = useState('');
+  const [history, setHistory] = useState<TransactionRecord[]>([]);
+  const [sending, setSending] = useState(false);
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
 
   const clearLogoutTimer = () => {
@@ -176,15 +180,20 @@ const Popup: React.FC = () => {
   const handleSend = async () => {
     if (!walletInfo) return;
     try {
-      const hash = await sendEth(walletInfo.mnemonic, toAddress, amount, network);
-      alert(`Transaction sent: ${hash}`);
+      setSending(true);
+      const { hash, status } = await sendEth(walletInfo.mnemonic, toAddress, amount, network);
+      alert(status === 1 ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
       const newBalance = await getEthBalance(walletInfo.address, network);
       setBalance(parseFloat(newBalance).toFixed(4));
+      const txHistory = await getTransactionHistory(walletInfo.address, network);
+      setHistory(txHistory);
       setToAddress('');
       setAmount('');
       setView('wallet');
     } catch (e) {
       alert('Failed to send transaction');
+    } finally {
+      setSending(false);
     }
   };
 
@@ -216,8 +225,15 @@ const Popup: React.FC = () => {
           console.error('Failed to fetch balance', e);
           setBalance('');
         });
+      getTransactionHistory(walletInfo.address, network)
+        .then((h) => setHistory(h))
+        .catch((e) => {
+          console.error('Failed to fetch history', e);
+          setHistory([]);
+        });
     } else {
       setBalance('');
+      setHistory([]);
     }
   }, [walletInfo, network]);
 
@@ -295,6 +311,21 @@ const Popup: React.FC = () => {
           <p><strong>Balance:</strong> {balance} ETH</p>
           <button onClick={() => setView('send')}>Send ETH</button>
           <button onClick={logout}>Logout</button>
+          {history.length > 0 && (
+            <div>
+              <h3>History</h3>
+              <ul style={{ maxHeight: '100px', overflowY: 'auto', paddingLeft: '1rem' }}>
+                {history.map((h) => {
+                  const isSend = h.from.toLowerCase() === walletInfo?.address.toLowerCase();
+                  return (
+                    <li key={h.hash}>
+                      {isSend ? 'Sent' : 'Received'} {h.value} ETH {isSend ? `to ${h.to}` : `from ${h.from}`} ({h.status === 1 ? 'Success' : 'Fail'})
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
         </div>
       )}
       {view === 'send' && (
@@ -309,7 +340,8 @@ const Popup: React.FC = () => {
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
-          <button onClick={handleSend}>Send</button>
+          <button onClick={handleSend} disabled={sending}>Send</button>
+          {sending && <p>Sending...</p>}
           <button onClick={() => setView('wallet')}>Cancel</button>
         </div>
       )}

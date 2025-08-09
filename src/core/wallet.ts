@@ -22,6 +22,14 @@ export interface WalletInfo {
   address: string;
 }
 
+export interface TransactionRecord {
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  status: number;
+}
+
 export function createWallet(): WalletInfo {
   const wallet = Wallet.createRandom();
   const mnemonic = wallet.mnemonic?.phrase || '';
@@ -54,9 +62,40 @@ export async function sendEth(
   to: string,
   amountEth: string,
   network: NetworkKey,
-): Promise<string> {
+): Promise<{ hash: string; status: number }> {
   const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
   const wallet = Wallet.fromPhrase(mnemonic.trim()).connect(provider);
   const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth) });
-  return tx.hash;
+  const receipt = await tx.wait();
+  return { hash: receipt.hash, status: receipt.status ?? 0 };
+}
+
+export async function getTransactionHistory(
+  address: string,
+  network: NetworkKey,
+): Promise<TransactionRecord[]> {
+  const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
+  const latest = await provider.getBlockNumber();
+  const start = Math.max(latest - 100, 0);
+  const records: TransactionRecord[] = [];
+  for (let i = latest; i >= start; i--) {
+    const block = await provider.getBlock(i, true);
+    if (!block) continue;
+    for (const tx of block.transactions) {
+      const from = tx.from.toLowerCase();
+      const toAddr = (tx.to || '').toLowerCase();
+      const target = address.toLowerCase();
+      if (from === target || toAddr === target) {
+        const receipt = await provider.getTransactionReceipt(tx.hash);
+        records.push({
+          hash: tx.hash,
+          from: tx.from,
+          to: tx.to || '',
+          value: formatEther(tx.value),
+          status: receipt?.status ?? 0,
+        });
+      }
+    }
+  }
+  return records;
 }
