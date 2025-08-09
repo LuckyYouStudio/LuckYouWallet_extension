@@ -1,7 +1,12 @@
-import React, { useState } from 'react';
-import { createWallet, importWallet } from '../core/wallet';
+import React, { useState, useEffect } from 'react';
+import { createWallet, importWallet, WalletInfo } from '../core/wallet';
 
 type View = 'home' | 'created' | 'import' | 'imported';
+
+const STORAGE_KEY = 'currentWallet';
+interface StoredWallet extends WalletInfo {
+  source: 'created' | 'imported';
+}
 
 const Popup: React.FC = () => {
   const [view, setView] = useState<View>('home');
@@ -9,11 +14,28 @@ const Popup: React.FC = () => {
   const [address, setAddress] = useState('');
   const [inputMnemonic, setInputMnemonic] = useState('');
 
+  useEffect(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      try {
+        const w: StoredWallet = JSON.parse(stored);
+        setMnemonic(w.mnemonic);
+        setAddress(w.address);
+        setView(w.source);
+      } catch (e) {
+        console.error('Failed to parse stored wallet', e);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+  }, []);
+
   const handleCreate = () => {
     const w = createWallet();
     setMnemonic(w.mnemonic);
     setAddress(w.address);
     setView('created');
+    const stored: StoredWallet = { ...w, source: 'created' };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
   };
 
   const handleImport = () => {
@@ -22,6 +44,8 @@ const Popup: React.FC = () => {
       setMnemonic(w.mnemonic);
       setAddress(w.address);
       setView('imported');
+      const stored: StoredWallet = { ...w, source: 'imported' };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
     } catch (err) {
       alert('Invalid mnemonic');
     }
@@ -32,6 +56,11 @@ const Popup: React.FC = () => {
     setMnemonic('');
     setAddress('');
     setInputMnemonic('');
+  };
+
+  const logout = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    backHome();
   };
 
   return (
@@ -47,7 +76,7 @@ const Popup: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <p><strong>Mnemonic:</strong> {mnemonic}</p>
           <p><strong>Address:</strong> {address}</p>
-          <button onClick={backHome}>Back</button>
+          <button onClick={logout}>Logout</button>
         </div>
       )}
       {view === 'import' && (
@@ -65,7 +94,7 @@ const Popup: React.FC = () => {
       {view === 'imported' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <p><strong>Address:</strong> {address}</p>
-          <button onClick={backHome}>Back</button>
+          <button onClick={logout}>Logout</button>
         </div>
       )}
     </div>
