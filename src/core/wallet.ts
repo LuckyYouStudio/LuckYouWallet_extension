@@ -110,7 +110,7 @@ export async function getTransactionHistory(
           hash: tx.hash,
           from: tx.from,
           to: tx.to || '',
-          value: formatEther(tx.value),
+          value: parseFloat(formatEther(tx.value)).toFixed(5),
           status,
         });
       }
