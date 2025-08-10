@@ -219,8 +219,10 @@ const Popup: React.FC = () => {
       const newBalance = await getEthBalance(walletInfo.address, network);
       setBalance(parseFloat(newBalance).toFixed(5));
       const txHistory = await getTransactionHistory(walletInfo.address, network);
-      setHistory(txHistory);
-      localStorage.setItem(key, JSON.stringify(txHistory));
+      if (txHistory.length > 0) {
+        setHistory(txHistory);
+        localStorage.setItem(key, JSON.stringify(txHistory));
+      }
       setToAddress('');
       setAmount('');
       setView('wallet');
@@ -272,8 +274,10 @@ const Popup: React.FC = () => {
         });
       getTransactionHistory(walletInfo.address, network)
         .then((h) => {
-          setHistory(h);
-          localStorage.setItem(key, JSON.stringify(h));
+          if (h.length > 0) {
+            setHistory(h);
+            localStorage.setItem(key, JSON.stringify(h));
+          }
         })
         .catch((e) => {
           console.error('Failed to fetch history', e);
