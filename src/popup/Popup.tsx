@@ -22,6 +22,10 @@ const SESSION_KEY = 'walletSession';
 const SESSION_TTL = 5 * 60 * 1000; // 5 minutes
 const NETWORK_STORAGE_KEY = 'selectedNetwork';
 const LANGUAGE_STORAGE_KEY = 'language';
+const HISTORY_STORAGE_KEY = 'txHistory';
+
+const getHistoryKey = (address: string, network: NetworkKey) =>
+  `${HISTORY_STORAGE_KEY}:${address.toLowerCase()}:${network}`;
 
 interface StoredWallet {
   source: 'created' | 'imported';
@@ -199,10 +203,24 @@ const Popup: React.FC = () => {
       const { hash, status } = await sendEth(walletInfo.mnemonic, toAddress, amount, network);
       const success = Number(status) === 1;
       alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
+      const record: TransactionRecord = {
+        hash,
+        from: walletInfo.address,
+        to: toAddress,
+        value: amount,
+        status: Number(status),
+      };
+      const key = getHistoryKey(walletInfo.address, network);
+      setHistory((prev) => {
+        const updated = [record, ...prev];
+        localStorage.setItem(key, JSON.stringify(updated));
+        return updated;
+      });
       const newBalance = await getEthBalance(walletInfo.address, network);
       setBalance(parseFloat(newBalance).toFixed(4));
       const txHistory = await getTransactionHistory(walletInfo.address, network);
       setHistory(txHistory);
+      localStorage.setItem(key, JSON.stringify(txHistory));
       setToAddress('');
       setAmount('');
       setView('wallet');
@@ -235,6 +253,17 @@ const Popup: React.FC = () => {
 
   useEffect(() => {
     if (walletInfo?.address) {
+      const key = getHistoryKey(walletInfo.address, network);
+      const cached = localStorage.getItem(key);
+      if (cached) {
+        try {
+          setHistory(JSON.parse(cached));
+        } catch {
+          setHistory([]);
+        }
+      } else {
+        setHistory([]);
+      }
       getEthBalance(walletInfo.address, network)
         .then((b) => setBalance(parseFloat(b).toFixed(4)))
         .catch((e) => {
@@ -242,10 +271,12 @@ const Popup: React.FC = () => {
           setBalance('');
         });
       getTransactionHistory(walletInfo.address, network)
-        .then((h) => setHistory(h))
+        .then((h) => {
+          setHistory(h);
+          localStorage.setItem(key, JSON.stringify(h));
+        })
         .catch((e) => {
           console.error('Failed to fetch history', e);
-          setHistory([]);
         });
     } else {
       setBalance('');
