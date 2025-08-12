@@ -1,4 +1,11 @@
-import { Wallet, JsonRpcProvider, formatEther, parseEther } from 'ethers';
+import {
+  Wallet,
+  JsonRpcProvider,
+  formatEther,
+  parseEther,
+  Contract,
+  formatUnits,
+} from 'ethers';
 
 export const NETWORKS = {
   mainnet: {
@@ -28,6 +35,13 @@ export interface TransactionRecord {
   to: string;
   value: string;
   status: number;
+}
+
+export interface TokenInfo {
+  address: string;
+  name: string;
+  symbol: string;
+  decimals: number;
 }
 
 export function createWallet(): WalletInfo {
@@ -117,4 +131,36 @@ export async function getTransactionHistory(
     }
   }
   return records;
+}
+
+const ERC20_ABI = [
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function decimals() view returns (uint8)',
+  'function balanceOf(address owner) view returns (uint256)',
+];
+
+export async function getTokenInfo(
+  address: string,
+  network: NetworkKey,
+): Promise<TokenInfo> {
+  const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
+  const contract = new Contract(address, ERC20_ABI, provider);
+  const [name, symbol, decimals] = await Promise.all([
+    contract.name(),
+    contract.symbol(),
+    contract.decimals(),
+  ]);
+  return { address, name, symbol, decimals };
+}
+
+export async function getTokenBalance(
+  token: TokenInfo,
+  owner: string,
+  network: NetworkKey,
+): Promise<string> {
+  const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
+  const contract = new Contract(token.address, ERC20_ABI, provider);
+  const balance = await contract.balanceOf(owner);
+  return formatUnits(balance, token.decimals);
 }
