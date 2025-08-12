@@ -25,6 +25,10 @@ export const translations = {
     viewOnEtherscan: 'View on Etherscan',
     success: 'Success',
     fail: 'Fail',
+    tokens: 'Tokens:',
+    addToken: 'Add Token',
+    tokenAddress: 'Token Contract Address',
+    add: 'Add',
   },
   zh: {
     title: 'LuckYou 钱包',
@@ -52,6 +56,10 @@ export const translations = {
     viewOnEtherscan: '在 Etherscan 查看',
     success: '成功',
     fail: '失败',
+    tokens: '代币:',
+    addToken: '添加代币',
+    tokenAddress: '代币合约地址',
+    add: '添加',
   },
 } as const;
 

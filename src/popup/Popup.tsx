@@ -11,11 +11,22 @@ import {
   TransactionRecord,
   NETWORKS,
   NetworkKey,
+  getTokenInfo,
+  TokenInfo,
+  getTokenBalance,
 } from '../core/wallet';
 import Activity from './Activity';
 import { translations, Lang, TranslationKey } from '../core/i18n';
 
-type View = 'home' | 'import' | 'setPassword' | 'unlock' | 'wallet' | 'send' | 'activity';
+type View =
+  | 'home'
+  | 'import'
+  | 'setPassword'
+  | 'unlock'
+  | 'wallet'
+  | 'send'
+  | 'activity'
+  | 'addToken';
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
@@ -23,9 +34,13 @@ const SESSION_TTL = 5 * 60 * 1000; // 5 minutes
 const NETWORK_STORAGE_KEY = 'selectedNetwork';
 const LANGUAGE_STORAGE_KEY = 'language';
 const HISTORY_STORAGE_KEY = 'txHistory';
+const TOKEN_STORAGE_KEY = 'tokens';
 
 const getHistoryKey = (address: string, network: NetworkKey) =>
   `${HISTORY_STORAGE_KEY}:${address.toLowerCase()}:${network}`;
+
+const getTokensKey = (address: string, network: NetworkKey) =>
+  `${TOKEN_STORAGE_KEY}:${address.toLowerCase()}:${network}`;
 
 interface StoredWallet {
   source: 'created' | 'imported';
@@ -56,6 +71,9 @@ const Popup: React.FC = () => {
   const [lang, setLang] = useState<Lang>((): Lang => (localStorage.getItem(LANGUAGE_STORAGE_KEY) as Lang) || 'en');
   const t = (key: TranslationKey) => translations[lang][key];
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
+  const [tokens, setTokens] = useState<TokenInfo[]>([]);
+  const [tokenBalances, setTokenBalances] = useState<Record<string, string>>({});
+  const [tokenAddress, setTokenAddress] = useState('');
 
   const clearLogoutTimer = () => {
     if (logoutTimer.current) {
@@ -128,6 +146,40 @@ const Popup: React.FC = () => {
     document.title = translations[lang].title;
     document.documentElement.lang = lang;
   }, [lang]);
+
+  useEffect(() => {
+    if (walletInfo?.address) {
+      const key = getTokensKey(walletInfo.address, network);
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        try {
+          setTokens(JSON.parse(stored));
+        } catch {
+          setTokens([]);
+        }
+      } else {
+        setTokens([]);
+      }
+    } else {
+      setTokens([]);
+    }
+  }, [walletInfo, network]);
+
+  useEffect(() => {
+    if (!walletInfo) return;
+    tokens.forEach((token) => {
+      getTokenBalance(token, walletInfo.address, network)
+        .then((b) =>
+          setTokenBalances((prev) => ({
+            ...prev,
+            [token.address]: parseFloat(b).toFixed(5),
+          })),
+        )
+        .catch(() =>
+          setTokenBalances((prev) => ({ ...prev, [token.address]: '0' })),
+        );
+    });
+  }, [tokens, walletInfo, network]);
 
   const saveSession = (info: WalletInfo, src: 'created' | 'imported') => {
     const session: WalletSession = {
@@ -233,6 +285,23 @@ const Popup: React.FC = () => {
     }
   };
 
+  const handleAddToken = async () => {
+    if (!walletInfo) return;
+    try {
+      const info = await getTokenInfo(tokenAddress.trim(), network);
+      setTokens((prev) => {
+        const updated = [...prev, info];
+        const key = getTokensKey(walletInfo.address, network);
+        localStorage.setItem(key, JSON.stringify(updated));
+        return updated;
+      });
+      setTokenAddress('');
+      setView('wallet');
+    } catch (e) {
+      alert('Invalid token contract');
+    }
+  };
+
   const backHome = () => {
     setView('home');
     setWalletInfo(null);
@@ -243,6 +312,9 @@ const Popup: React.FC = () => {
     setUnlockPassword('');
     setEncryptedWallet(null);
     setBalance('');
+    setTokens([]);
+    setTokenBalances({});
+    setTokenAddress('');
     clearLogoutTimer();
     localStorage.removeItem(SESSION_KEY);
   };
@@ -359,42 +431,64 @@ const Popup: React.FC = () => {
       )}
       {view === 'wallet' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {source === 'created' && (
-            <p><strong>Mnemonic:</strong> {walletInfo?.mnemonic}</p>
-          )}
-          <p><strong>Address:</strong> {walletInfo?.address}</p>
-          <p><strong>Balance:</strong> {balance} ETH</p>
-          <button onClick={() => setView('send')}>{t('sendETH')}</button>
-          <button onClick={() => setView('activity')}>{t('activity')}</button>
-          <button onClick={logout}>{t('logout')}</button>
+      {source === 'created' && (
+        <p><strong>Mnemonic:</strong> {walletInfo?.mnemonic}</p>
+      )}
+      <p><strong>Address:</strong> {walletInfo?.address}</p>
+      <p><strong>Balance:</strong> {balance} ETH</p>
+      {tokens.length > 0 && (
+        <div>
+          <p><strong>{t('tokens')}</strong></p>
+          {tokens.map((token) => (
+            <p key={token.address}>
+              {token.symbol}: {tokenBalances[token.address] || '0'}
+            </p>
+          ))}
         </div>
       )}
-      {view === 'send' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <input
-            placeholder="Recipient Address"
-            value={toAddress}
-            onChange={(e) => setToAddress(e.target.value)}
-          />
-          <input
-            placeholder="Amount (ETH)"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-          <button onClick={handleSend} disabled={sending}>{t('send')}</button>
-          {sending && <p>{t('sending')}</p>}
-          <button onClick={() => setView('wallet')}>{t('cancel')}</button>
-        </div>
-      )}
-      {view === 'activity' && walletInfo && (
-        <Activity
-          records={history}
-          wallet={walletInfo}
-          onBack={() => setView('wallet')}
-          t={t}
-        />
-      )}
+      <button onClick={() => setView('addToken')}>{t('addToken')}</button>
+      <button onClick={() => setView('send')}>{t('sendETH')}</button>
+      <button onClick={() => setView('activity')}>{t('activity')}</button>
+      <button onClick={logout}>{t('logout')}</button>
     </div>
+  )}
+  {view === 'send' && (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <input
+        placeholder="Recipient Address"
+        value={toAddress}
+        onChange={(e) => setToAddress(e.target.value)}
+      />
+      <input
+        placeholder="Amount (ETH)"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+      />
+      <button onClick={handleSend} disabled={sending}>{t('send')}</button>
+      {sending && <p>{t('sending')}</p>}
+      <button onClick={() => setView('wallet')}>{t('cancel')}</button>
+    </div>
+  )}
+  {view === 'addToken' && (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <input
+        placeholder={t('tokenAddress')}
+        value={tokenAddress}
+        onChange={(e) => setTokenAddress(e.target.value)}
+      />
+      <button onClick={handleAddToken}>{t('add')}</button>
+      <button onClick={() => setView('wallet')}>{t('cancel')}</button>
+    </div>
+  )}
+  {view === 'activity' && walletInfo && (
+    <Activity
+      records={history}
+      wallet={walletInfo}
+      onBack={() => setView('wallet')}
+      t={t}
+    />
+  )}
+  </div>
   );
 };
 
