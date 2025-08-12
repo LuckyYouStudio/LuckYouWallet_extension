@@ -5,6 +5,8 @@ import {
   parseEther,
   Contract,
   formatUnits,
+  id,
+  zeroPadValue,
 } from 'ethers';
 
 export const NETWORKS = {
@@ -163,4 +165,47 @@ export async function getTokenBalance(
   const contract = new Contract(token.address, ERC20_ABI, provider);
   const balance = await contract.balanceOf(owner);
   return formatUnits(balance, token.decimals);
+}
+
+export async function detectTokens(
+  owner: string,
+  network: NetworkKey,
+): Promise<TokenInfo[]> {
+  const provider = new JsonRpcProvider(NETWORKS[network].rpcUrl);
+  let latest: number;
+  try {
+    latest = await provider.getBlockNumber();
+  } catch {
+    return [];
+  }
+  const start = Math.max(latest - 10000, 0);
+  const transferTopic = id('Transfer(address,address,uint256)');
+  const addressTopic = zeroPadValue(owner, 32);
+  let logs = [] as any[];
+  try {
+    const logsTo = await provider.getLogs({
+      fromBlock: start,
+      toBlock: latest,
+      topics: [transferTopic, null, addressTopic],
+    });
+    const logsFrom = await provider.getLogs({
+      fromBlock: start,
+      toBlock: latest,
+      topics: [transferTopic, addressTopic],
+    });
+    logs = [...logsTo, ...logsFrom];
+  } catch {
+    return [];
+  }
+  const tokenAddresses = new Set<string>();
+  logs.forEach((log) => tokenAddresses.add(log.address.toLowerCase()));
+  const tokens: TokenInfo[] = [];
+  for (const addr of tokenAddresses) {
+    try {
+      tokens.push(await getTokenInfo(addr, network));
+    } catch {
+      // ignore
+    }
+  }
+  return tokens;
 }

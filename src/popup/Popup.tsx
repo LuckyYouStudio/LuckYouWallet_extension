@@ -14,6 +14,7 @@ import {
   getTokenInfo,
   TokenInfo,
   getTokenBalance,
+  detectTokens,
 } from '../core/wallet';
 import Activity from './Activity';
 import { translations, Lang, TranslationKey } from '../core/i18n';
@@ -148,21 +149,30 @@ const Popup: React.FC = () => {
   }, [lang]);
 
   useEffect(() => {
-    if (walletInfo?.address) {
-      const key = getTokensKey(walletInfo.address, network);
-      const stored = localStorage.getItem(key);
-      if (stored) {
+    const loadTokens = async () => {
+      if (walletInfo?.address) {
+        const key = getTokensKey(walletInfo.address, network);
+        const stored = localStorage.getItem(key);
+        if (stored) {
+          try {
+            setTokens(JSON.parse(stored));
+            return;
+          } catch {
+            // fall through to detection
+          }
+        }
         try {
-          setTokens(JSON.parse(stored));
+          const detected = await detectTokens(walletInfo.address, network);
+          setTokens(detected);
+          localStorage.setItem(key, JSON.stringify(detected));
         } catch {
           setTokens([]);
         }
       } else {
         setTokens([]);
       }
-    } else {
-      setTokens([]);
-    }
+    };
+    loadTokens();
   }, [walletInfo, network]);
 
   useEffect(() => {
