@@ -142,6 +142,7 @@ const Popup: React.FC = () => {
   const [allNetworks, setAllNetworks] = useState<Record<string, any>>({});
   const [lastRefreshTime, setLastRefreshTime] = useState<number>(0);
   const [balanceLoaded, setBalanceLoaded] = useState(false);
+  const [networkInitialized, setNetworkInitialized] = useState(false);
   const [toAddress, setToAddress] = useState('');
   const balanceResetRef = useRef(false);
   const balanceProtectedRef = useRef(false);
@@ -266,7 +267,11 @@ const Popup: React.FC = () => {
         console.log('Successfully loaded saved network:', currentNetwork);
         console.log('Available networks:', Object.keys(networks));
         
+        // 直接设置缓存的网络，避免先设置 mainnet 再切换
         setNetwork(currentNetwork);
+        
+        // 标记网络初始化完成
+        setNetworkInitialized(true);
         
         // 不在这里加载余额，让网络状态变化的 useEffect 来处理
       } catch (error) {
@@ -274,6 +279,9 @@ const Popup: React.FC = () => {
         console.log('Falling back to default network: mainnet');
         setNetwork('mainnet');
         setAllNetworks(NETWORKS);
+        
+        // 标记网络初始化完成
+        setNetworkInitialized(true);
         
         // 不在这里加载余额，让网络状态变化的 useEffect 来处理
       }
@@ -283,24 +291,26 @@ const Popup: React.FC = () => {
 
   // 当网络状态变化时，如果有钱包信息则加载余额
   useEffect(() => {
+    // 只有在网络初始化完成后才处理余额加载
+    if (!networkInitialized) {
+      console.log('[NETWORK DEBUG] Network not yet initialized, skipping balance load...');
+      return;
+    }
+    
     if (walletInfo?.address && network) {
       console.log(`[NETWORK DEBUG] Network changed to: ${network}, loading balance...`);
       
-      // 检查是否是扩展启动时的初始 mainnet（需要跳过）
-      // 只有在扩展刚启动且网络是 mainnet 且还没有加载过余额时才跳过
-      if (network === 'mainnet' && !balanceAutoRefreshRef.current && !balanceLoaded) {
-        console.log('[NETWORK DEBUG] Skipping initial mainnet balance load, waiting for saved network...');
-        return;
+      // 只有在视图是钱包视图时才加载余额，避免重复加载
+      if (view === 'wallet') {
+        // 增加延迟，确保网络状态完全更新
+        setTimeout(() => {
+          loadBalance(walletInfo.address, network, true);
+          // 标记已经加载过余额，防止视图变化时重复加载
+          balanceAutoRefreshRef.current = true;
+        }, 200);
       }
-      
-      // 增加延迟，确保网络状态完全更新
-      setTimeout(() => {
-        loadBalance(walletInfo.address, network, true);
-        // 标记已经加载过余额，防止视图变化时重复加载
-        balanceAutoRefreshRef.current = true;
-      }, 200);
     }
-  }, [network, walletInfo?.address]);
+  }, [network, walletInfo?.address, view, networkInitialized]);
 
   useEffect(() => {
     document.title = translations[lang].title;
@@ -593,10 +603,7 @@ const Popup: React.FC = () => {
     // 立即更新界面
     setNetwork(value);
     
-    // 如果有钱包地址，立即重新加载余额
-    if (walletInfo?.address) {
-      loadBalance(walletInfo.address, value, true);
-    }
+    // 不在这里手动加载余额，让 useEffect 来处理，避免重复调用
     
     // 尝试保存到存储
     try {
@@ -614,7 +621,7 @@ const Popup: React.FC = () => {
     } catch (error) {
       console.error('Failed to save network selection:', error);
       // 不显示错误提示，因为网络切换已经成功，只是保存可能失败
-      // 用户下次打开时会重新加载默认网络
+      // 用户下次打开时会重新加载余额
     }
   };
 
@@ -624,10 +631,7 @@ const Popup: React.FC = () => {
     // 立即更新界面
     setNetwork(newNetwork);
     
-    // 如果有钱包地址，立即重新加载余额
-    if (walletInfo?.address) {
-      loadBalance(walletInfo.address, newNetwork, true);
-    }
+    // 不在这里手动加载余额，让 useEffect 来处理，避免重复调用
     
     // 尝试保存到存储
     try {
@@ -967,14 +971,11 @@ const Popup: React.FC = () => {
   useEffect(() => {
     console.log(`[VIEW DEBUG] View changed to: ${view}, walletInfo?.address: ${walletInfo?.address}, network: ${network}`);
     
-    // 当进入钱包视图且有钱包信息时，加载余额
+    // 当进入钱包视图且有钱包信息时，重置自动刷新标志
     if (view === 'wallet' && walletInfo?.address && network) {
-      console.log('[VIEW DEBUG] Entering wallet view, loading balance...');
-      // 重置自动刷新标志，允许重新加载余额
+      console.log('[VIEW DEBUG] Entering wallet view, resetting balance auto-refresh flag...');
+      // 重置自动刷新标志，允许网络变化时重新加载余额
       balanceAutoRefreshRef.current = false;
-      setTimeout(() => {
-        loadBalance(walletInfo.address, network, true);
-      }, 100);
     }
   }, [view, walletInfo?.address, network]);
 
