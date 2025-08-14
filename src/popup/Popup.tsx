@@ -1,4 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
+
+// 声明chrome API类型
+declare global {
+  interface Window {
+    chrome: {
+      storage: {
+        local: {
+          get(keys?: string | object | string[] | null): Promise<{ [key: string]: any }>;
+          set(items: object): Promise<void>;
+          remove(keys: string | string[]): Promise<void>;
+          clear(): Promise<void>;
+        };
+      };
+      tabs: {
+        query(queryInfo: any): Promise<any[]>;
+      };
+      runtime: {
+        sendMessage(message: any): Promise<any>;
+      };
+    };
+  }
+}
 import {
   createWallet,
   importWallet,
@@ -22,7 +44,7 @@ import {
   getCurrentNetwork,
   setCurrentNetwork,
   getAllNetworks,
-  testStorage,
+
 } from '../core/wallet';
 import Activity from './Activity';
 import NetworkManager from './NetworkManager';
@@ -41,7 +63,9 @@ type View =
   | 'sendToken'
   | 'confirmEthTransaction'
   | 'confirmTokenTransaction'
-  | 'networks';
+  | 'networks'
+  | 'authorize'
+  | 'signTransaction';
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
@@ -80,6 +104,11 @@ const Popup: React.FC = () => {
   const [unlockPassword, setUnlockPassword] = useState('');
   const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
   const [balance, setBalance] = useState('');
+  
+  // 授权和签名相关状态
+  const [pendingAuth, setPendingAuth] = useState<any>(null);
+  const [pendingSignature, setPendingSignature] = useState<any>(null);
+  const [currentSite, setCurrentSite] = useState<string>('');
   
   // 调试：跟踪余额变化
   const setBalanceWithLog = (newBalance: string, source: string) => {
@@ -257,8 +286,9 @@ const Popup: React.FC = () => {
     if (walletInfo?.address && network) {
       console.log(`[NETWORK DEBUG] Network changed to: ${network}, loading balance...`);
       
-      // 检查网络状态是否已经稳定（不是初始的 mainnet）
-      if (network === 'mainnet' && !balanceAutoRefreshRef.current) {
+      // 检查是否是扩展启动时的初始 mainnet（需要跳过）
+      // 只有在扩展刚启动且网络是 mainnet 且还没有加载过余额时才跳过
+      if (network === 'mainnet' && !balanceAutoRefreshRef.current && !balanceLoaded) {
         console.log('[NETWORK DEBUG] Skipping initial mainnet balance load, waiting for saved network...');
         return;
       }
@@ -350,6 +380,159 @@ const Popup: React.FC = () => {
     setWalletInfo(w);
     setSource('created');
     setView('setPassword');
+  };
+
+  // 处理授权请求
+  const handleAuthorize = async (approved: boolean) => {
+    try {
+      if (approved) {
+        // 保存授权信息
+        const result = await chrome.storage.local.get('authorizedSites');
+        const authorizedSites = result.authorizedSites || {};
+        authorizedSites[currentSite] = true;
+        await chrome.storage.local.set({ authorizedSites });
+
+        // 发送成功响应
+        await (window as any).chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: pendingAuth.requestId,
+          result: {
+            jsonrpc: '2.0',
+            id: pendingAuth.requestId,
+            result: [walletInfo?.address]
+          }
+        });
+      } else {
+        // 发送拒绝响应
+        await (window as any).chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: pendingAuth.requestId,
+          error: {
+            code: -32001,
+            message: 'User rejected the request'
+          }
+        });
+      }
+
+      // 清理待处理请求
+      await chrome.storage.local.remove('pendingAuth');
+      setPendingAuth(null);
+      setView('wallet');
+    } catch (error) {
+      console.error('[AUTH DEBUG] Error handling authorization:', error);
+    }
+  };
+
+  // 处理签名请求
+  const handleSignTransaction = async (approved: boolean) => {
+    try {
+      if (approved && walletInfo) {
+        const { request } = pendingSignature;
+        
+        let signature: string;
+        
+        switch (request.method) {
+          case 'personal_sign':
+            signature = await signMessage(request.params[0], request.params[1]);
+            break;
+          case 'eth_signTypedData_v4':
+            signature = await signTypedData(request.params[1], request.params[0]);
+            break;
+          case 'eth_sendTransaction':
+            signature = await sendTransaction(request.params[0]);
+            break;
+          default:
+            throw new Error(`Unsupported method: ${request.method}`);
+        }
+
+        // 发送成功响应
+        await (window as any).chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: pendingSignature.requestId,
+          result: {
+            jsonrpc: '2.0',
+            id: pendingSignature.requestId,
+            result: signature
+          }
+        });
+      } else {
+        // 发送拒绝响应
+        await (window as any).chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: pendingSignature.requestId,
+          error: {
+            code: -32001,
+            message: 'User rejected the request'
+          }
+        });
+      }
+
+      // 清理待处理请求
+      await chrome.storage.local.remove('pendingSignature');
+      setPendingSignature(null);
+      setView('wallet');
+    } catch (error) {
+      console.error('[SIGNATURE DEBUG] Error handling signature:', error);
+      
+      // 发送错误响应
+      await (window as any).chrome.runtime.sendMessage({
+        type: 'POPUP_RESPONSE',
+        requestId: pendingSignature.requestId,
+        error: {
+          code: -32603,
+          message: (error as Error).message || 'Signature failed'
+        }
+      });
+    }
+  };
+
+  // 签名消息
+  const signMessage = async (message: string, address: string): Promise<string> => {
+    if (!walletInfo?.privateKey) throw new Error('No wallet available');
+    
+    const { ethers } = await import('ethers');
+    const wallet = new ethers.Wallet(walletInfo.privateKey);
+    
+    // 验证地址
+    if (wallet.address.toLowerCase() !== address.toLowerCase()) {
+      throw new Error('Address mismatch');
+    }
+    
+    return await wallet.signMessage(message);
+  };
+
+  // 签名类型化数据
+  const signTypedData = async (typedData: string, address: string): Promise<string> => {
+    if (!walletInfo?.privateKey) throw new Error('No wallet available');
+    
+    const { ethers } = await import('ethers');
+    const wallet = new ethers.Wallet(walletInfo.privateKey);
+    
+    // 验证地址
+    if (wallet.address.toLowerCase() !== address.toLowerCase()) {
+      throw new Error('Address mismatch');
+    }
+    
+    const data = JSON.parse(typedData);
+    return await wallet.signTypedData(data.domain, data.types, data.message);
+  };
+
+  // 发送交易
+  const sendTransaction = async (transaction: any): Promise<string> => {
+    if (!walletInfo?.privateKey) throw new Error('No wallet available');
+    
+    const { ethers } = await import('ethers');
+    const { getCurrentNetwork, getAllNetworks } = await import('../core/wallet');
+    
+    const currentNetwork = await getCurrentNetwork();
+    const allNetworks = await getAllNetworks();
+    const networkConfig = allNetworks[currentNetwork];
+    
+    const provider = new ethers.JsonRpcProvider(networkConfig.rpcUrl);
+    const wallet = new ethers.Wallet(walletInfo.privateKey, provider);
+    
+    const tx = await wallet.sendTransaction(transaction);
+    return tx.hash;
   };
 
   const handleImport = () => {
@@ -780,56 +963,254 @@ const Popup: React.FC = () => {
     }
   }, [walletInfo, network]);
 
-  // 监听视图变化，但不在这里加载余额
+  // 监听视图变化，当进入钱包视图时加载余额
   useEffect(() => {
     console.log(`[VIEW DEBUG] View changed to: ${view}, walletInfo?.address: ${walletInfo?.address}, network: ${network}`);
-    // 移除余额加载逻辑，只由网络状态变化来处理
+    
+    // 当进入钱包视图且有钱包信息时，加载余额
+    if (view === 'wallet' && walletInfo?.address && network) {
+      console.log('[VIEW DEBUG] Entering wallet view, loading balance...');
+      // 重置自动刷新标志，允许重新加载余额
+      balanceAutoRefreshRef.current = false;
+      setTimeout(() => {
+        loadBalance(walletInfo.address, network, true);
+      }, 100);
+    }
   }, [view, walletInfo?.address, network]);
 
+  // 检查待处理的授权和签名请求
+  useEffect(() => {
+    const checkPendingRequests = async () => {
+      try {
+        // 检查待处理的授权请求
+        const authResult = await chrome.storage.local.get('pendingAuth');
+        if (authResult.pendingAuth) {
+          console.log('[AUTH DEBUG] Found pending auth request:', authResult.pendingAuth);
+          setPendingAuth(authResult.pendingAuth);
+          setView('authorize');
+          
+          // 获取当前网站信息
+          try {
+            const tabs = await (window as any).chrome.tabs.query({ active: true, currentWindow: true });
+            if (tabs[0]?.url) {
+              const url = new URL(tabs[0].url);
+              setCurrentSite(url.hostname);
+            }
+          } catch (error) {
+            console.error('[AUTH DEBUG] Error getting current site:', error);
+            setCurrentSite('Unknown Site');
+          }
+          return;
+        }
+
+        // 检查待处理的签名请求
+        const signatureResult = await chrome.storage.local.get('pendingSignature');
+        if (signatureResult.pendingSignature) {
+          console.log('[SIGNATURE DEBUG] Found pending signature request:', signatureResult.pendingSignature);
+          setPendingSignature(signatureResult.pendingSignature);
+          setView('signTransaction');
+          return;
+        }
+      } catch (error) {
+        console.error('[REQUEST DEBUG] Error checking pending requests:', error);
+      }
+    };
+
+    checkPendingRequests();
+  }, []);
+
   return (
-    <div style={{ padding: '1rem', width: 300 }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-        <button onClick={() => switchLang('en')}>EN</button>
-        <button onClick={() => switchLang('zh')}>中文</button>
+    <div style={{ 
+      padding: '1.5rem', 
+      width: 360, 
+      minHeight: 500,
+      backgroundColor: '#f8f9fa',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      fontSize: '14px',
+      lineHeight: 1.5,
+      color: '#333'
+    }}>
+      {/* 语言切换按钮 */}
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'flex-end', 
+        gap: '0.5rem', 
+        marginBottom: '1rem' 
+      }}>
+        <button 
+          onClick={() => switchLang('en')}
+          style={{
+            padding: '0.25rem 0.5rem',
+            fontSize: '12px',
+            backgroundColor: lang === 'en' ? '#007bff' : '#e9ecef',
+            color: lang === 'en' ? 'white' : '#495057',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          EN
+        </button>
+        <button 
+          onClick={() => switchLang('zh')}
+          style={{
+            padding: '0.25rem 0.5rem',
+            fontSize: '12px',
+            backgroundColor: lang === 'zh' ? '#007bff' : '#e9ecef',
+            color: lang === 'zh' ? 'white' : '#495057',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          中文
+        </button>
       </div>
-      <h1>{t('title')}</h1>
+      
+      {/* 标题 */}
+      <h1 style={{ 
+        margin: '0 0 1.5rem 0', 
+        fontSize: '1.5rem', 
+        fontWeight: '600',
+        color: '#212529',
+        textAlign: 'center'
+      }}>
+        {t('title')}
+      </h1>
       {view === 'wallet' && (
-        <div style={{ marginBottom: '0.5rem' }}>
-          <label>
-            {t('network')}
-            <select value={network} onChange={handleNetworkChange} style={{ marginLeft: '0.5rem' }}>
-              {Object.entries(allNetworks).map(([key, { name }]) => (
-                <option key={key} value={key}>{name}</option>
-              ))}
-            </select>
-          </label>
-          <button 
-            onClick={() => setView('networks')} 
-            style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}
+        <div style={{ 
+          marginBottom: '1rem',
+          padding: '1rem',
+          backgroundColor: 'white',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          border: '1px solid #e9ecef'
+        }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'space-between',
+            marginBottom: '0.5rem'
+          }}>
+            <label style={{ 
+              fontSize: '0.875rem', 
+              fontWeight: '500',
+              color: '#495057'
+            }}>
+              {t('network')}
+            </label>
+            <button 
+              onClick={() => setView('networks')} 
+              style={{ 
+                fontSize: '0.75rem',
+                padding: '0.25rem 0.5rem',
+                backgroundColor: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                transition: 'background-color 0.2s ease'
+              }}
+              onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#5a6268'}
+              onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#6c757d'}
+            >
+              {t('settings')}
+            </button>
+          </div>
+          <select 
+            value={network} 
+            onChange={handleNetworkChange} 
+            style={{ 
+              width: '100%',
+              padding: '0.5rem',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              fontSize: '0.875rem',
+              backgroundColor: 'white',
+              cursor: 'pointer'
+            }}
           >
-            {t('settings')}
-          </button>
+            {Object.entries(allNetworks).map(([key, { name }]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
         </div>
       )}
       {view === 'home' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <button onClick={handleCreate}>{t('createWallet')}</button>
-          <button onClick={() => setView('import')}>{t('importWallet')}</button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <button 
+            onClick={handleCreate}
+            style={{
+              padding: '1rem',
+              fontSize: '1rem',
+              fontWeight: '500',
+              backgroundColor: '#007bff',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+            }}
+            onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#0056b3'}
+            onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#007bff'}
+          >
+            {t('createWallet')}
+          </button>
+          <button 
+            onClick={() => setView('import')}
+            style={{
+              padding: '1rem',
+              fontSize: '1rem',
+              fontWeight: '500',
+              backgroundColor: '#6c757d',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+            }}
+            onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#5a6268'}
+            onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#6c757d'}
+          >
+            {t('importWallet')}
+          </button>
         </div>
       )}
       {view === 'import' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {/* 导入方式选择 */}
+          <div style={{ 
+            display: 'flex', 
+            gap: '0.5rem', 
+            marginBottom: '0.5rem' 
+          }}>
             <button 
               onClick={() => setImportMethod('mnemonic')}
               style={{ 
                 flex: 1, 
                 backgroundColor: importMethod === 'mnemonic' ? '#007bff' : '#f8f9fa',
-                color: importMethod === 'mnemonic' ? 'white' : 'black',
+                color: importMethod === 'mnemonic' ? 'white' : '#495057',
                 border: '1px solid #dee2e6',
-                padding: '0.5rem',
-                borderRadius: '4px',
-                cursor: 'pointer'
+                padding: '0.75rem',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => {
+                if (importMethod !== 'mnemonic') {
+                  (e.target as HTMLElement).style.backgroundColor = '#e9ecef';
+                }
+              }}
+              onMouseOut={(e) => {
+                if (importMethod !== 'mnemonic') {
+                  (e.target as HTMLElement).style.backgroundColor = '#f8f9fa';
+                }
               }}
             >
               {t('mnemonic')}
@@ -839,36 +1220,105 @@ const Popup: React.FC = () => {
               style={{ 
                 flex: 1, 
                 backgroundColor: importMethod === 'privateKey' ? '#007bff' : '#f8f9fa',
-                color: importMethod === 'privateKey' ? 'white' : 'black',
+                color: importMethod === 'privateKey' ? 'white' : '#495057',
                 border: '1px solid #dee2e6',
-                padding: '0.5rem',
-                borderRadius: '4px',
-                cursor: 'pointer'
+                padding: '0.75rem',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => {
+                if (importMethod !== 'privateKey') {
+                  (e.target as HTMLElement).style.backgroundColor = '#e9ecef';
+                }
+              }}
+              onMouseOut={(e) => {
+                if (importMethod !== 'privateKey') {
+                  (e.target as HTMLElement).style.backgroundColor = '#f8f9fa';
+                }
               }}
             >
               {t('privateKey')}
             </button>
           </div>
           
+          {/* 输入框 */}
           {importMethod === 'mnemonic' ? (
             <textarea
-              placeholder="Enter mnemonic phrase (12, 15, 18, 21, or 24 words)"
+              placeholder={lang === 'zh' ? "输入助记词 (12, 15, 18, 21, 或 24 个单词)" : "Enter mnemonic phrase (12, 15, 18, 21, or 24 words)"}
               value={inputMnemonic}
               onChange={(e) => setInputMnemonic(e.target.value)}
-              style={{ width: '100%', minHeight: '80px', padding: '0.5rem' }}
+              style={{ 
+                width: '100%', 
+                minHeight: '100px', 
+                padding: '0.75rem',
+                border: '1px solid #ced4da',
+                borderRadius: '6px',
+                fontSize: '0.875rem',
+                fontFamily: 'monospace',
+                resize: 'vertical'
+              }}
             />
           ) : (
             <input
               type="password"
-              placeholder="Enter private key (64 hex characters)"
+              placeholder={lang === 'zh' ? "输入私钥 (64 位十六进制字符)" : "Enter private key (64 hex characters)"}
               value={inputPrivateKey}
               onChange={(e) => setInputPrivateKey(e.target.value)}
-              style={{ width: '100%', padding: '0.5rem' }}
+              style={{ 
+                width: '100%', 
+                padding: '0.75rem',
+                border: '1px solid #ced4da',
+                borderRadius: '6px',
+                fontSize: '0.875rem',
+                fontFamily: 'monospace'
+              }}
             />
           )}
           
-          <button onClick={handleImport}>{t('import')}</button>
-          <button onClick={backHome}>{t('cancel')}</button>
+          {/* 操作按钮 */}
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button 
+              onClick={handleImport}
+              style={{
+                flex: 1,
+                padding: '0.75rem',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                backgroundColor: '#28a745',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                transition: 'background-color 0.2s ease'
+              }}
+              onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#218838'}
+              onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#28a745'}
+            >
+              {t('import')}
+            </button>
+            <button 
+              onClick={backHome}
+              style={{
+                flex: 1,
+                padding: '0.75rem',
+                fontSize: '0.875rem',
+                fontWeight: '500',
+                backgroundColor: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                transition: 'background-color 0.2s ease'
+              }}
+              onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#5a6268'}
+              onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#6c757d'}
+            >
+              {t('cancel')}
+            </button>
+          </div>
         </div>
       )}
       {view === 'setPassword' && (
@@ -906,39 +1356,132 @@ const Popup: React.FC = () => {
         </div>
       )}
       {view === 'wallet' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      {source === 'created' && walletInfo?.mnemonic && (
-        <p><strong>Mnemonic:</strong> {walletInfo.mnemonic}</p>
-      )}
-      <p><strong>Address:</strong> {walletInfo?.address}</p>
-      <p>
-        <strong>Balance:</strong> 
-        {balanceLoading ? (
-          <span style={{ color: '#007bff' }}>加载中...</span>
-        ) : balanceLoaded ? (
-          <span>{balance} ETH</span>
-        ) : (
-          <span style={{ color: '#6c757d' }}>未加载</span>
-        )}
-        {walletInfo?.address && (
-          <button 
-            onClick={() => loadBalance(walletInfo.address, network, true)}
-            disabled={balanceLoading}
-            style={{ 
-              marginLeft: '0.5rem', 
-              fontSize: '0.7rem', 
-              padding: '0.2rem 0.5rem',
-              backgroundColor: balanceLoading ? '#ccc' : '#28a745',
-              color: 'white',
-              border: 'none',
-              borderRadius: '3px',
-              cursor: balanceLoading ? 'not-allowed' : 'pointer'
-            }}
-          >
-            {balanceLoading ? '刷新中...' : '刷新'}
-          </button>
-        )}
-      </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {/* 钱包信息卡片 */}
+          <div style={{ 
+            padding: '1rem',
+            backgroundColor: 'white',
+            borderRadius: '8px',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            border: '1px solid #e9ecef'
+          }}>
+            {source === 'created' && walletInfo?.mnemonic && (
+              <div style={{ 
+                marginBottom: '1rem',
+                padding: '0.75rem',
+                backgroundColor: '#fff3cd',
+                border: '1px solid #ffeaa7',
+                borderRadius: '4px'
+              }}>
+                <div style={{ 
+                  fontSize: '0.875rem', 
+                  fontWeight: '500',
+                  color: '#856404',
+                  marginBottom: '0.5rem'
+                }}>
+                  {t('mnemonic')}:
+                </div>
+                <div style={{ 
+                  fontSize: '0.75rem',
+                  color: '#856404',
+                  wordBreak: 'break-all',
+                  fontFamily: 'monospace'
+                }}>
+                  {walletInfo.mnemonic}
+                </div>
+              </div>
+            )}
+            
+            {/* 地址信息 */}
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ 
+                fontSize: '0.875rem', 
+                fontWeight: '500',
+                color: '#495057',
+                marginBottom: '0.5rem'
+              }}>
+                {t('address')}:
+              </div>
+              <div style={{ 
+                fontSize: '0.75rem',
+                color: '#6c757d',
+                wordBreak: 'break-all',
+                fontFamily: 'monospace',
+                padding: '0.5rem',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '4px',
+                border: '1px solid #e9ecef'
+              }}>
+                {walletInfo?.address}
+              </div>
+            </div>
+            
+            {/* 余额信息 */}
+            <div>
+              <div style={{ 
+                fontSize: '0.875rem', 
+                fontWeight: '500',
+                color: '#495057',
+                marginBottom: '0.5rem'
+              }}>
+                {t('balance')}:
+              </div>
+              <div style={{ 
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div style={{ 
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  color: balanceLoaded ? '#28a745' : '#6c757d'
+                }}>
+                  {balanceLoading ? (
+                    <span style={{ color: '#007bff' }}>
+                      {lang === 'zh' ? '加载中...' : 'Loading...'}
+                    </span>
+                  ) : balanceLoaded ? (
+                    <span>{balance} ETH</span>
+                  ) : (
+                    <span style={{ color: '#6c757d' }}>
+                      {lang === 'zh' ? '未加载' : 'Not loaded'}
+                    </span>
+                  )}
+                </div>
+                {walletInfo?.address && (
+                  <button 
+                    onClick={() => loadBalance(walletInfo.address, network, true)}
+                    disabled={balanceLoading}
+                    style={{ 
+                      fontSize: '0.75rem',
+                      padding: '0.375rem 0.75rem',
+                      backgroundColor: balanceLoading ? '#6c757d' : '#28a745',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: balanceLoading ? 'not-allowed' : 'pointer',
+                      transition: 'background-color 0.2s ease'
+                    }}
+                    onMouseOver={(e) => {
+                      if (!balanceLoading) {
+                        (e.target as HTMLElement).style.backgroundColor = '#218838';
+                      }
+                    }}
+                    onMouseOut={(e) => {
+                      if (!balanceLoading) {
+                        (e.target as HTMLElement).style.backgroundColor = '#28a745';
+                      }
+                    }}
+                  >
+                    {balanceLoading ? 
+                      (lang === 'zh' ? '刷新中...' : 'Refreshing...') : 
+                      (lang === 'zh' ? '刷新' : 'Refresh')
+                    }
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
       {tokens.length > 0 && (
         <div>
           <p><strong>{t('tokens')}</strong></p>
@@ -971,45 +1514,6 @@ const Popup: React.FC = () => {
        <button onClick={() => setView('send')}>{t('sendETH')}</button>
        <button onClick={() => setView('activity')}>{t('activity')}</button>
        <button onClick={logout}>{t('logout')}</button>
-       <button 
-         onClick={() => {
-           console.log('Testing storage functionality...');
-           testStorage().then(() => {
-             console.log('Storage test completed');
-           }).catch((error) => {
-             console.error('Storage test error:', error);
-           });
-         }}
-         style={{ fontSize: '0.8rem', backgroundColor: '#ffc107', color: 'black' }}
-       >
-         测试存储功能
-       </button>
-       <button 
-         onClick={async () => {
-           console.log('Simple storage test...');
-           if (chrome?.storage?.local) {
-             console.log('Chrome storage API available');
-             try {
-               await chrome.storage.local.set({ simpleTest: 'test_value' });
-               console.log('Simple test write completed');
-               const result = await chrome.storage.local.get('simpleTest');
-               console.log('Simple test read result:', result);
-               if (result.simpleTest === 'test_value') {
-                 console.log('Simple storage test PASSED');
-               } else {
-                 console.log('Simple storage test FAILED');
-               }
-             } catch (error) {
-               console.error('Simple storage test error:', error);
-             }
-           } else {
-             console.log('Chrome storage API not available');
-           }
-         }}
-         style={{ fontSize: '0.8rem', backgroundColor: '#28a745', color: 'white' }}
-       >
-         简单存储测试
-       </button>
     </div>
   )}
   {view === 'send' && (
@@ -1230,6 +1734,315 @@ const Popup: React.FC = () => {
           setGasEstimate(null);
         }}>
           {t('reject')}
+        </button>
+      </div>
+    </div>
+  )}
+  
+  {/* 授权界面 */}
+  {view === 'authorize' && pendingAuth && (
+    <div style={{ 
+      padding: '1.5rem', 
+      width: 360, 
+      minHeight: 500,
+      backgroundColor: '#f8f9fa',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      fontSize: '14px',
+      lineHeight: 1.5,
+      color: '#333'
+    }}>
+      <h2 style={{ 
+        margin: '0 0 1.5rem 0', 
+        fontSize: '1.25rem', 
+        fontWeight: '600',
+        color: '#212529',
+        textAlign: 'center'
+      }}>
+        {lang === 'zh' ? '连接请求' : 'Connection Request'}
+      </h2>
+      
+      <div style={{ 
+        marginBottom: '1.5rem',
+        padding: '1rem',
+        backgroundColor: 'white',
+        borderRadius: '8px',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        border: '1px solid #e9ecef'
+      }}>
+        <div style={{ 
+          fontSize: '0.875rem', 
+          fontWeight: '500',
+          color: '#495057',
+          marginBottom: '0.5rem'
+        }}>
+          {lang === 'zh' ? '网站' : 'Site'}:
+        </div>
+        <div style={{ 
+          fontSize: '0.875rem',
+          color: '#007bff',
+          fontWeight: '500'
+        }}>
+          {currentSite}
+        </div>
+      </div>
+      
+      <div style={{ 
+        marginBottom: '1.5rem',
+        padding: '1rem',
+        backgroundColor: 'white',
+        borderRadius: '8px',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        border: '1px solid #e9ecef'
+      }}>
+        <div style={{ 
+          fontSize: '0.875rem', 
+          fontWeight: '500',
+          color: '#495057',
+          marginBottom: '0.5rem'
+        }}>
+          {lang === 'zh' ? '钱包地址' : 'Wallet Address'}:
+        </div>
+        <div style={{ 
+          fontSize: '0.75rem',
+          color: '#6c757d',
+          wordBreak: 'break-all',
+          fontFamily: 'monospace',
+          padding: '0.5rem',
+          backgroundColor: '#f8f9fa',
+          borderRadius: '4px',
+          border: '1px solid #e9ecef'
+        }}>
+          {walletInfo?.address}
+        </div>
+      </div>
+      
+      <div style={{ 
+        fontSize: '0.875rem',
+        color: '#6c757d',
+        marginBottom: '1.5rem',
+        textAlign: 'center'
+      }}>
+        {lang === 'zh' ? 
+          '此网站想要连接到您的钱包。请确认您信任此网站。' : 
+          'This site wants to connect to your wallet. Please confirm you trust this site.'
+        }
+      </div>
+      
+      <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <button 
+          onClick={() => handleAuthorize(false)}
+          style={{ 
+            flex: 1,
+            padding: '0.75rem',
+            backgroundColor: '#6c757d',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: '500',
+            transition: 'background-color 0.2s ease'
+          }}
+          onMouseOver={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#5a6268';
+          }}
+          onMouseOut={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
+          }}
+        >
+          {lang === 'zh' ? '拒绝' : 'Reject'}
+        </button>
+        <button 
+          onClick={() => handleAuthorize(true)}
+          style={{ 
+            flex: 1,
+            padding: '0.75rem',
+            backgroundColor: '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: '500',
+            transition: 'background-color 0.2s ease'
+          }}
+          onMouseOver={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#218838';
+          }}
+          onMouseOut={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#28a745';
+          }}
+        >
+          {lang === 'zh' ? '连接' : 'Connect'}
+        </button>
+      </div>
+    </div>
+  )}
+  
+  {/* 签名界面 */}
+  {view === 'signTransaction' && pendingSignature && (
+    <div style={{ 
+      padding: '1.5rem', 
+      width: 360, 
+      minHeight: 500,
+      backgroundColor: '#f8f9fa',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      fontSize: '14px',
+      lineHeight: 1.5,
+      color: '#333'
+    }}>
+      <h2 style={{ 
+        margin: '0 0 1.5rem 0', 
+        fontSize: '1.25rem', 
+        fontWeight: '600',
+        color: '#212529',
+        textAlign: 'center'
+      }}>
+        {lang === 'zh' ? '签名请求' : 'Signature Request'}
+      </h2>
+      
+      <div style={{ 
+        marginBottom: '1.5rem',
+        padding: '1rem',
+        backgroundColor: 'white',
+        borderRadius: '8px',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        border: '1px solid #e9ecef'
+      }}>
+        <div style={{ 
+          fontSize: '0.875rem', 
+          fontWeight: '500',
+          color: '#495057',
+          marginBottom: '0.5rem'
+        }}>
+          {lang === 'zh' ? '请求类型' : 'Request Type'}:
+        </div>
+        <div style={{ 
+          fontSize: '0.875rem',
+          color: '#007bff',
+          fontWeight: '500'
+        }}>
+          {pendingSignature.request.method}
+        </div>
+      </div>
+      
+      {pendingSignature.request.method === 'eth_sendTransaction' && (
+        <div style={{ 
+          marginBottom: '1.5rem',
+          padding: '1rem',
+          backgroundColor: 'white',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          border: '1px solid #e9ecef'
+        }}>
+          <div style={{ 
+            fontSize: '0.875rem', 
+            fontWeight: '500',
+            color: '#495057',
+            marginBottom: '0.5rem'
+          }}>
+            {lang === 'zh' ? '交易详情' : 'Transaction Details'}:
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#6c757d' }}>
+            <div><strong>{lang === 'zh' ? '接收地址' : 'To'}:</strong> {pendingSignature.request.params[0].to}</div>
+            <div><strong>{lang === 'zh' ? '金额' : 'Value'}:</strong> {pendingSignature.request.params[0].value || '0'} wei</div>
+            <div><strong>{lang === 'zh' ? 'Gas限制' : 'Gas Limit'}:</strong> {pendingSignature.request.params[0].gasLimit || 'Auto'}</div>
+          </div>
+        </div>
+      )}
+      
+      {pendingSignature.request.method === 'personal_sign' && (
+        <div style={{ 
+          marginBottom: '1.5rem',
+          padding: '1rem',
+          backgroundColor: 'white',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          border: '1px solid #e9ecef'
+        }}>
+          <div style={{ 
+            fontSize: '0.875rem', 
+            fontWeight: '500',
+            color: '#495057',
+            marginBottom: '0.5rem'
+          }}>
+            {lang === 'zh' ? '消息内容' : 'Message'}:
+          </div>
+          <div style={{ 
+            fontSize: '0.75rem',
+            color: '#6c757d',
+            wordBreak: 'break-all',
+            fontFamily: 'monospace',
+            padding: '0.5rem',
+            backgroundColor: '#f8f9fa',
+            borderRadius: '4px',
+            border: '1px solid #e9ecef',
+            maxHeight: '100px',
+            overflow: 'auto'
+          }}>
+            {pendingSignature.request.params[0]}
+          </div>
+        </div>
+      )}
+      
+      <div style={{ 
+        fontSize: '0.875rem',
+        color: '#6c757d',
+        marginBottom: '1.5rem',
+        textAlign: 'center'
+      }}>
+        {lang === 'zh' ? 
+          '请仔细检查交易详情，确认无误后点击签名。' : 
+          'Please carefully review the transaction details before signing.'
+        }
+      </div>
+      
+      <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <button 
+          onClick={() => handleSignTransaction(false)}
+          style={{ 
+            flex: 1,
+            padding: '0.75rem',
+            backgroundColor: '#6c757d',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: '500',
+            transition: 'background-color 0.2s ease'
+          }}
+          onMouseOver={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#5a6268';
+          }}
+          onMouseOut={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
+          }}
+        >
+          {lang === 'zh' ? '拒绝' : 'Reject'}
+        </button>
+        <button 
+          onClick={() => handleSignTransaction(true)}
+          style={{ 
+            flex: 1,
+            padding: '0.75rem',
+            backgroundColor: '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: '500',
+            transition: 'background-color 0.2s ease'
+          }}
+          onMouseOver={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#218838';
+          }}
+          onMouseOut={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#28a745';
+          }}
+        >
+          {lang === 'zh' ? '签名' : 'Sign'}
         </button>
       </div>
     </div>

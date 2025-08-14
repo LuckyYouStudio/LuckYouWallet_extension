@@ -216,38 +216,7 @@ export async function setCurrentNetwork(networkKey: NetworkKey): Promise<void> {
 // 更新现有的NETWORKS常量以使用新的NetworkConfig接口
 export const NETWORKS = DEFAULT_NETWORKS;
 
-// 测试函数：检查存储功能
-export async function testStorage(): Promise<void> {
-  if (!chrome?.storage?.local) {
-    console.error('Chrome storage API not available for testing');
-    return;
-  }
-  
-  try {
-    console.log('Testing storage functionality...');
-    
-    // 测试写入
-    const testValue = 'test_network_' + Date.now();
-    await chrome.storage.local.set({ testKey: testValue });
-    console.log('Test write successful');
-    
-    // 测试读取
-    const result = await chrome.storage.local.get('testKey');
-    console.log('Test read result:', result);
-    
-    if (result.testKey === testValue) {
-      console.log('Storage test PASSED');
-    } else {
-      console.log('Storage test FAILED');
-    }
-    
-    // 清理测试数据
-    await chrome.storage.local.remove('testKey');
-    console.log('Test cleanup completed');
-  } catch (error) {
-    console.error('Storage test failed:', error);
-  }
-}
+
 
 export interface WalletInfo {
   mnemonic: string;

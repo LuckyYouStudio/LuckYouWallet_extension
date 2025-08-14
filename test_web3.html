@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuckYou Wallet Web3 连接测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #212529;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-success:hover {
+            background-color: #218838;
+        }
+        .btn-warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        .btn-warning:hover {
+            background-color: #e0a800;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        .info-box {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #007bff;
+        }
+        .result-box {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            margin-top: 20px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.loading {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #495057;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔗 LuckYou Wallet Web3 连接测试</h1>
+        
+        <div id="status" class="status disconnected">
+            ❌ 未连接到钱包
+        </div>
+        
+        <div class="info-box">
+            <strong>使用说明：</strong>
+            <ol>
+                <li>确保已安装 LuckYou Wallet 浏览器扩展</li>
+                <li>在扩展中创建或导入钱包</li>
+                <li>点击"连接钱包"按钮</li>
+                <li>在扩展弹窗中确认连接</li>
+                <li>测试各种Web3功能</li>
+            </ol>
+        </div>
+        
+        <div class="button-group">
+            <button class="btn-primary" onclick="connectWallet()">🔗 连接钱包</button>
+            <button class="btn-success" onclick="getAccounts()">👤 获取账户</button>
+            <button class="btn-success" onclick="getBalance()">💰 获取余额</button>
+            <button class="btn-success" onclick="getChainId()">🌐 获取链ID</button>
+            <button class="btn-warning" onclick="signMessage()">✍️ 签名消息</button>
+            <button class="btn-danger" onclick="sendTransaction()">📤 发送交易</button>
+        </div>
+        
+        <div class="form-group">
+            <label for="messageInput">消息内容（用于签名测试）：</label>
+            <textarea id="messageInput" placeholder="输入要签名的消息...">Hello LuckYou Wallet!</textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="toAddress">接收地址（用于交易测试）：</label>
+            <input type="text" id="toAddress" placeholder="0x..." />
+        </div>
+        
+        <div class="form-group">
+            <label for="amount">交易金额（ETH）：</label>
+            <input type="number" id="amount" placeholder="0.001" step="0.001" min="0" />
+        </div>
+        
+        <div id="result" class="result-box" style="display: none;"></div>
+    </div>
+
+    <script>
+        let ethereum = null;
+        let currentAccount = null;
+        
+        // 检查钱包连接状态
+        function updateStatus() {
+            const statusEl = document.getElementById('status');
+            if (ethereum && ethereum.isConnected()) {
+                statusEl.className = 'status connected';
+                statusEl.innerHTML = `✅ 已连接到钱包 (${currentAccount})`;
+            } else {
+                statusEl.className = 'status disconnected';
+                statusEl.innerHTML = '❌ 未连接到钱包';
+            }
+        }
+        
+        // 显示结果
+        function showResult(data) {
+            const resultEl = document.getElementById('result');
+            resultEl.style.display = 'block';
+            resultEl.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        // 显示错误
+        function showError(error) {
+            const resultEl = document.getElementById('result');
+            resultEl.style.display = 'block';
+            resultEl.textContent = `错误: ${error.message || error}`;
+        }
+        
+        // 等待钱包注入
+        function waitForWallet() {
+            return new Promise((resolve) => {
+                if (window.ethereum) {
+                    resolve(window.ethereum);
+                    return;
+                }
+                
+                window.addEventListener('ethereum#initialized', () => {
+                    resolve(window.ethereum);
+                });
+                
+                // 超时检查
+                setTimeout(() => {
+                    if (window.ethereum) {
+                        resolve(window.ethereum);
+                    } else {
+                        resolve(null);
+                    }
+                }, 3000);
+            });
+        }
+        
+        // 连接钱包
+        async function connectWallet() {
+            try {
+                ethereum = await waitForWallet();
+                
+                if (!ethereum) {
+                    showError('未检测到 LuckYou Wallet 扩展，请确保已安装并刷新页面');
+                    return;
+                }
+                
+                // 请求账户连接
+                const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+                currentAccount = accounts[0];
+                
+                updateStatus();
+                showResult({
+                    success: true,
+                    accounts: accounts,
+                    message: '钱包连接成功！'
+                });
+                
+                // 监听账户变化
+                ethereum.on('accountsChanged', (accounts) => {
+                    currentAccount = accounts[0];
+                    updateStatus();
+                    showResult({
+                        type: 'accountsChanged',
+                        accounts: accounts
+                    });
+                });
+                
+                // 监听链变化
+                ethereum.on('chainChanged', (chainId) => {
+                    showResult({
+                        type: 'chainChanged',
+                        chainId: chainId
+                    });
+                });
+                
+            } catch (error) {
+                showError(error);
+            }
+        }
+        
+        // 获取账户
+        async function getAccounts() {
+            try {
+                if (!ethereum) {
+                    showError('请先连接钱包');
+                    return;
+                }
+                
+                const accounts = await ethereum.request({ method: 'eth_accounts' });
+                showResult({
+                    method: 'eth_accounts',
+                    accounts: accounts
+                });
+            } catch (error) {
+                showError(error);
+            }
+        }
+        
+        // 获取余额
+        async function getBalance() {
+            try {
+                if (!ethereum || !currentAccount) {
+                    showError('请先连接钱包');
+                    return;
+                }
+                
+                const balance = await ethereum.request({
+                    method: 'eth_getBalance',
+                    params: [currentAccount, 'latest']
+                });
+                
+                // 转换为ETH
+                const balanceInEth = parseInt(balance, 16) / Math.pow(10, 18);
+                
+                showResult({
+                    method: 'eth_getBalance',
+                    address: currentAccount,
+                    balance: balance,
+                    balanceInEth: balanceInEth
+                });
+            } catch (error) {
+                showError(error);
+            }
+        }
+        
+        // 获取链ID
+        async function getChainId() {
+            try {
+                if (!ethereum) {
+                    showError('请先连接钱包');
+                    return;
+                }
+                
+                const chainId = await ethereum.request({ method: 'eth_chainId' });
+                showResult({
+                    method: 'eth_chainId',
+                    chainId: chainId
+                });
+            } catch (error) {
+                showError(error);
+            }
+        }
+        
+        // 签名消息
+        async function signMessage() {
+            try {
+                if (!ethereum || !currentAccount) {
+                    showError('请先连接钱包');
+                    return;
+                }
+                
+                const message = document.getElementById('messageInput').value;
+                if (!message) {
+                    showError('请输入要签名的消息');
+                    return;
+                }
+                
+                const signature = await ethereum.request({
+                    method: 'personal_sign',
+                    params: [message, currentAccount]
+                });
+                
+                showResult({
+                    method: 'personal_sign',
+                    message: message,
+                    address: currentAccount,
+                    signature: signature
+                });
+            } catch (error) {
+                showError(error);
+            }
+        }
+        
+        // 发送交易
+        async function sendTransaction() {
+            try {
+                if (!ethereum || !currentAccount) {
+                    showError('请先连接钱包');
+                    return;
+                }
+                
+                const toAddress = document.getElementById('toAddress').value;
+                const amount = document.getElementById('amount').value;
+                
+                if (!toAddress || !amount) {
+                    showError('请输入接收地址和金额');
+                    return;
+                }
+                
+                // 转换为wei
+                const amountInWei = (parseFloat(amount) * Math.pow(10, 18)).toString(16);
+                
+                const transactionParameters = {
+                    to: toAddress,
+                    from: currentAccount,
+                    value: '0x' + amountInWei
+                };
+                
+                const txHash = await ethereum.request({
+                    method: 'eth_sendTransaction',
+                    params: [transactionParameters]
+                });
+                
+                showResult({
+                    method: 'eth_sendTransaction',
+                    transaction: transactionParameters,
+                    txHash: txHash
+                });
+            } catch (error) {
+                showError(error);
+            }
+        }
+        
+        // 页面加载时检查钱包
+        window.addEventListener('load', async () => {
+            ethereum = await waitForWallet();
+            if (ethereum) {
+                updateStatus();
+                showResult({
+                    message: '检测到 LuckYou Wallet 扩展',
+                    ethereum: ethereum.isLuckYouWallet ? 'LuckYou Wallet' : 'Unknown'
+                });
+            }
+        });
+    </script>
+</body>
+</html>

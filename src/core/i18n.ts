@@ -64,6 +64,8 @@ export const translations = {
     settings: 'Settings',
     mnemonic: 'Mnemonic',
     privateKey: 'Private Key',
+    address: 'Address',
+    balance: 'Balance',
   },
   zh: {
     title: 'LuckYou 钱包',
@@ -130,6 +132,8 @@ export const translations = {
     settings: '设置',
     mnemonic: '助记词',
     privateKey: '私钥',
+    address: '地址',
+    balance: '余额',
   },
 } as const;
 
