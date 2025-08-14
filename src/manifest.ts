@@ -13,5 +13,7 @@ export default {
     default_popup: 'popup.html',
     default_title: 'LuckYou Wallet'
   },
-  permissions: []
+  permissions: [
+    'storage'
+  ]
 };

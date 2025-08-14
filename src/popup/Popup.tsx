@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   createWallet,
   importWallet,
-  encryptWallet,
+  importWalletByPrivateKey,
+  encryptWalletData,
   decryptWallet,
   WalletInfo,
   getEthBalance,
   sendEth,
+  sendEthWithPrivateKey,
   getTransactionHistory,
   TransactionRecord,
   NETWORKS,
@@ -17,8 +19,13 @@ import {
   detectTokens,
   isTokenContract,
   GasEstimate,
+  getCurrentNetwork,
+  setCurrentNetwork,
+  getAllNetworks,
+  testStorage,
 } from '../core/wallet';
 import Activity from './Activity';
+import NetworkManager from './NetworkManager';
 import { translations, Lang, TranslationKey } from '../core/i18n';
 
 type View =
@@ -33,7 +40,8 @@ type View =
   | 'tokenDetail'
   | 'sendToken'
   | 'confirmEthTransaction'
-  | 'confirmTokenTransaction';
+  | 'confirmTokenTransaction'
+  | 'networks';
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
@@ -65,13 +73,67 @@ const Popup: React.FC = () => {
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [source, setSource] = useState<'created' | 'imported' | null>(null);
   const [inputMnemonic, setInputMnemonic] = useState('');
+  const [inputPrivateKey, setInputPrivateKey] = useState('');
+  const [importMethod, setImportMethod] = useState<'mnemonic' | 'privateKey'>('mnemonic');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [unlockPassword, setUnlockPassword] = useState('');
   const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
   const [balance, setBalance] = useState('');
+  
+  // 调试：跟踪余额变化
+  const setBalanceWithLog = (newBalance: string, source: string) => {
+    console.log(`[BALANCE DEBUG] Setting balance to "${newBalance}" from ${source} (previous: "${balance}")`);
+    console.log(`[BALANCE DEBUG] Stack trace:`, new Error().stack);
+    
+    // 如果余额已经被保护且尝试重置为空，则阻止
+    if (newBalance === '' && balanceProtectedRef.current && balance !== '') {
+      console.warn(`[BALANCE DEBUG] Preventing protected balance reset from ${source} - current balance: "${balance}"`);
+      return;
+    }
+    
+    // 如果是重置为空字符串，检查是否真的需要重置
+    if (newBalance === '' && balance !== '' && !balanceResetRef.current) {
+      console.warn(`[BALANCE DEBUG] Preventing balance reset from ${source} - current balance: "${balance}"`);
+      return;
+    }
+    
+    setBalance(newBalance);
+    
+    // 如果设置了有效余额，标记为不需要重置并保护
+    if (newBalance !== '' && parseFloat(newBalance) >= 0) {
+      balanceResetRef.current = false;
+      balanceProtectedRef.current = true;
+      balanceAutoRefreshRef.current = false; // 重置自动刷新标记
+      console.log(`[BALANCE DEBUG] Balance protected: "${newBalance}"`);
+    }
+  };
+  const [balanceLoading, setBalanceLoading] = useState(false);
   const [network, setNetwork] = useState<NetworkKey>('mainnet');
+  const [allNetworks, setAllNetworks] = useState<Record<string, any>>({});
+  const [lastRefreshTime, setLastRefreshTime] = useState<number>(0);
+  const [balanceLoaded, setBalanceLoaded] = useState(false);
   const [toAddress, setToAddress] = useState('');
+  const balanceResetRef = useRef(false);
+  const balanceProtectedRef = useRef(false);
+  const balanceAutoRefreshRef = useRef(false);
+  
+  // 从链上加载余额（不持久化）
+  const loadBalanceFromChain = async () => {
+    if (!walletInfo?.address) return;
+    
+    try {
+      console.log(`[BALANCE DEBUG] Loading balance from chain for address: ${walletInfo.address}, current network: ${network}`);
+      const balance = await getEthBalance(walletInfo.address, network);
+      const formattedBalance = parseFloat(balance).toFixed(5);
+      console.log(`[BALANCE DEBUG] Balance loaded from chain: ${formattedBalance} ETH`);
+      setBalanceWithLog(formattedBalance, 'loadBalanceFromChain');
+      setBalanceLoaded(true);
+    } catch (error) {
+      console.error('[BALANCE DEBUG] Failed to load balance from chain:', error);
+      setBalanceLoaded(false);
+    }
+  };
   const [amount, setAmount] = useState('');
   const [history, setHistory] = useState<TransactionRecord[]>([]);
   const [sending, setSending] = useState(false);
@@ -137,6 +199,8 @@ const Popup: React.FC = () => {
           setView('wallet');
           sessionValid = true;
           startSessionTimer(SESSION_TTL - elapsed);
+          
+          // 不在这里加载余额，等待网络加载完成后再加载
         } else {
           localStorage.removeItem(SESSION_KEY);
         }
@@ -161,11 +225,52 @@ const Popup: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const storedNetwork = localStorage.getItem(NETWORK_STORAGE_KEY) as NetworkKey | null;
-    if (storedNetwork && NETWORKS[storedNetwork]) {
-      setNetwork(storedNetwork);
+    const loadCurrentNetwork = async () => {
+      console.log('Loading current network...');
+      try {
+        // 先加载网络列表
+        const networks = await getAllNetworks();
+        setAllNetworks(networks);
+        
+        // 然后加载保存的网络
+        const currentNetwork = await getCurrentNetwork();
+        console.log('Successfully loaded saved network:', currentNetwork);
+        console.log('Available networks:', Object.keys(networks));
+        
+        setNetwork(currentNetwork);
+        
+        // 不在这里加载余额，让网络状态变化的 useEffect 来处理
+      } catch (error) {
+        console.error('Failed to load current network:', error);
+        console.log('Falling back to default network: mainnet');
+        setNetwork('mainnet');
+        setAllNetworks(NETWORKS);
+        
+        // 不在这里加载余额，让网络状态变化的 useEffect 来处理
+      }
+    };
+    loadCurrentNetwork();
+  }, []); // 只在组件挂载时执行一次
+
+  // 当网络状态变化时，如果有钱包信息则加载余额
+  useEffect(() => {
+    if (walletInfo?.address && network) {
+      console.log(`[NETWORK DEBUG] Network changed to: ${network}, loading balance...`);
+      
+      // 检查网络状态是否已经稳定（不是初始的 mainnet）
+      if (network === 'mainnet' && !balanceAutoRefreshRef.current) {
+        console.log('[NETWORK DEBUG] Skipping initial mainnet balance load, waiting for saved network...');
+        return;
+      }
+      
+      // 增加延迟，确保网络状态完全更新
+      setTimeout(() => {
+        loadBalance(walletInfo.address, network, true);
+        // 标记已经加载过余额，防止视图变化时重复加载
+        balanceAutoRefreshRef.current = true;
+      }, 200);
     }
-  }, []);
+  }, [network, walletInfo?.address]);
 
   useEffect(() => {
     document.title = translations[lang].title;
@@ -249,12 +354,19 @@ const Popup: React.FC = () => {
 
   const handleImport = () => {
     try {
-      const w = importWallet(inputMnemonic);
+      let w: WalletInfo;
+      
+      if (importMethod === 'mnemonic') {
+        w = importWallet(inputMnemonic);
+      } else {
+        w = importWalletByPrivateKey(inputPrivateKey);
+      }
+      
       setWalletInfo(w);
       setSource('imported');
       setView('setPassword');
     } catch (err) {
-      alert('Invalid mnemonic');
+      alert(importMethod === 'mnemonic' ? 'Invalid mnemonic' : 'Invalid private key');
     }
   };
 
@@ -265,7 +377,7 @@ const Popup: React.FC = () => {
       return;
     }
     try {
-      const encrypted = await encryptWallet(walletInfo.mnemonic, password);
+      const encrypted = await encryptWalletData(walletInfo, password);
       const stored: StoredWallet = { source, encrypted };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
       setEncryptedWallet(encrypted);
@@ -291,10 +403,67 @@ const Popup: React.FC = () => {
     }
   };
 
-  const handleNetworkChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleNetworkChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value as NetworkKey;
+    console.log('User switching to network:', value);
+    
+    // 立即更新界面
     setNetwork(value);
-    localStorage.setItem(NETWORK_STORAGE_KEY, value);
+    
+    // 如果有钱包地址，立即重新加载余额
+    if (walletInfo?.address) {
+      loadBalance(walletInfo.address, value, true);
+    }
+    
+    // 尝试保存到存储
+    try {
+      console.log('Attempting to save network:', value);
+      await setCurrentNetwork(value);
+      console.log('Network successfully switched and saved:', value);
+      
+      // 验证保存是否成功
+      const savedNetwork = await getCurrentNetwork();
+      console.log('Verification - saved network is:', savedNetwork);
+      
+      if (savedNetwork !== value) {
+        console.warn('Network save verification failed. Expected:', value, 'Got:', savedNetwork);
+      }
+    } catch (error) {
+      console.error('Failed to save network selection:', error);
+      // 不显示错误提示，因为网络切换已经成功，只是保存可能失败
+      // 用户下次打开时会重新加载默认网络
+    }
+  };
+
+  const handleNetworkManagerChange = async (newNetwork: NetworkKey) => {
+    console.log('Switching to network from manager:', newNetwork);
+    
+    // 立即更新界面
+    setNetwork(newNetwork);
+    
+    // 如果有钱包地址，立即重新加载余额
+    if (walletInfo?.address) {
+      loadBalance(walletInfo.address, newNetwork, true);
+    }
+    
+    // 尝试保存到存储
+    try {
+      console.log('Attempting to save network from manager:', newNetwork);
+      await setCurrentNetwork(newNetwork);
+      console.log('Network switched and saved from manager:', newNetwork);
+      
+      // 验证保存是否成功
+      const savedNetwork = await getCurrentNetwork();
+      console.log('Verification - saved network from manager is:', savedNetwork);
+      
+      if (savedNetwork !== newNetwork) {
+        console.warn('Network save verification failed from manager. Expected:', newNetwork, 'Got:', savedNetwork);
+      }
+    } catch (error) {
+      console.error('Failed to save network selection from manager:', error);
+      // 不显示错误提示，网络切换已经成功
+    }
+    setView('wallet');
   };
 
   const handleSend = async () => {
@@ -327,7 +496,19 @@ const Popup: React.FC = () => {
     
     try {
       setSending(true);
-      const { hash, status } = await sendEth(walletInfo.mnemonic, pendingTransaction.to, pendingTransaction.amount, network);
+      let result;
+      
+      if (walletInfo.privateKey) {
+        // 私钥导入的钱包
+        result = await sendEthWithPrivateKey(walletInfo.privateKey, pendingTransaction.to, pendingTransaction.amount, network);
+      } else if (walletInfo.mnemonic) {
+        // 助记词导入的钱包
+        result = await sendEth(walletInfo.mnemonic, pendingTransaction.to, pendingTransaction.amount, network);
+      } else {
+        throw new Error('No wallet credentials available');
+      }
+      
+      const { hash, status } = result;
       const success = Number(status) === 1;
       alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
       
@@ -347,7 +528,7 @@ const Popup: React.FC = () => {
       });
       
       const newBalance = await getEthBalance(walletInfo.address, network);
-      setBalance(parseFloat(newBalance).toFixed(5));
+      setBalanceWithLog(parseFloat(newBalance).toFixed(5), 'transaction-success');
       const txHistory = await getTransactionHistory(walletInfo.address, network);
       if (txHistory.length > 0) {
         setHistory(txHistory);
@@ -503,7 +684,11 @@ const Popup: React.FC = () => {
     setConfirmPassword('');
     setUnlockPassword('');
     setEncryptedWallet(null);
-    setBalance('');
+    balanceResetRef.current = true;
+    balanceProtectedRef.current = false;
+    setBalanceWithLog('', 'backHome-reset');
+    setBalanceLoaded(false);
+
     setTokens([]);
     setTokenBalances({});
     setTokenAddress('');
@@ -517,8 +702,49 @@ const Popup: React.FC = () => {
     backHome();
   };
 
+  // 加载余额的函数
+  const loadBalance = async (address: string, currentNetwork: NetworkKey, forceRefresh: boolean = false) => {
+    if (!address) return;
+    
+    console.log(`[BALANCE DEBUG] loadBalance called with network: ${currentNetwork}, current state network: ${network}`);
+    
+    // 如果不是强制刷新，检查是否需要自动刷新（扩展刚打开时）
+    const now = Date.now();
+    const timeSinceLastRefresh = now - lastRefreshTime;
+    
+    if (!forceRefresh && timeSinceLastRefresh < 5000) {
+      console.log('Balance was recently loaded, skipping auto-refresh');
+      return;
+    }
+    
+    setBalanceLoading(true);
+    try {
+      console.log(`Loading balance for address: ${address} on network: ${currentNetwork} (forceRefresh: ${forceRefresh})`);
+      const balance = await getEthBalance(address, currentNetwork);
+      const formattedBalance = parseFloat(balance).toFixed(5);
+      console.log(`Balance loaded: ${formattedBalance} ETH`);
+      
+      // 只有在成功获取到余额时才更新状态
+      if (formattedBalance !== 'NaN' && parseFloat(formattedBalance) >= 0) {
+              setBalanceWithLog(formattedBalance, 'loadBalance-success');
+      setLastRefreshTime(now);
+      setBalanceLoaded(true);
+        console.log(`Balance successfully updated to: ${formattedBalance} ETH`);
+      } else {
+        console.warn('Invalid balance received, keeping current balance');
+      }
+    } catch (error) {
+      console.error('Failed to load balance:', error);
+      // 不重置余额，保持当前显示的值
+      console.log('Keeping current balance due to error');
+    } finally {
+      setBalanceLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (walletInfo?.address) {
+      // 加载交易历史
       const key = getHistoryKey(walletInfo.address, network);
       const cached = localStorage.getItem(key);
       if (cached) {
@@ -530,12 +756,7 @@ const Popup: React.FC = () => {
       } else {
         setHistory([]);
       }
-      getEthBalance(walletInfo.address, network)
-        .then((b) => setBalance(parseFloat(b).toFixed(5)))
-        .catch((e) => {
-          console.error('Failed to fetch balance', e);
-          setBalance('');
-        });
+      
       getTransactionHistory(walletInfo.address, network)
         .then((h) => {
           if (h.length > 0) {
@@ -547,10 +768,23 @@ const Popup: React.FC = () => {
           console.error('Failed to fetch history', e);
         });
     } else {
-      setBalance('');
+      // 只有在没有钱包信息时才重置余额
+      if (!walletInfo?.address) {
+        balanceResetRef.current = true;
+        balanceProtectedRef.current = false;
+        setBalanceWithLog('', 'useEffect-no-wallet');
+        setBalanceLoaded(false);
+
+      }
       setHistory([]);
     }
   }, [walletInfo, network]);
+
+  // 监听视图变化，但不在这里加载余额
+  useEffect(() => {
+    console.log(`[VIEW DEBUG] View changed to: ${view}, walletInfo?.address: ${walletInfo?.address}, network: ${network}`);
+    // 移除余额加载逻辑，只由网络状态变化来处理
+  }, [view, walletInfo?.address, network]);
 
   return (
     <div style={{ padding: '1rem', width: 300 }}>
@@ -559,16 +793,24 @@ const Popup: React.FC = () => {
         <button onClick={() => switchLang('zh')}>中文</button>
       </div>
       <h1>{t('title')}</h1>
-      <div style={{ marginBottom: '0.5rem' }}>
-        <label>
-          {t('network')}
-          <select value={network} onChange={handleNetworkChange} style={{ marginLeft: '0.5rem' }}>
-            {Object.entries(NETWORKS).map(([key, { name }]) => (
-              <option key={key} value={key}>{name}</option>
-            ))}
-          </select>
-        </label>
-      </div>
+      {view === 'wallet' && (
+        <div style={{ marginBottom: '0.5rem' }}>
+          <label>
+            {t('network')}
+            <select value={network} onChange={handleNetworkChange} style={{ marginLeft: '0.5rem' }}>
+              {Object.entries(allNetworks).map(([key, { name }]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </label>
+          <button 
+            onClick={() => setView('networks')} 
+            style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}
+          >
+            {t('settings')}
+          </button>
+        </div>
+      )}
       {view === 'home' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <button onClick={handleCreate}>{t('createWallet')}</button>
@@ -577,20 +819,62 @@ const Popup: React.FC = () => {
       )}
       {view === 'import' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <textarea
-            placeholder="Enter mnemonic"
-            value={inputMnemonic}
-            onChange={(e) => setInputMnemonic(e.target.value)}
-            style={{ width: '100%' }}
-          />
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <button 
+              onClick={() => setImportMethod('mnemonic')}
+              style={{ 
+                flex: 1, 
+                backgroundColor: importMethod === 'mnemonic' ? '#007bff' : '#f8f9fa',
+                color: importMethod === 'mnemonic' ? 'white' : 'black',
+                border: '1px solid #dee2e6',
+                padding: '0.5rem',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              {t('mnemonic')}
+            </button>
+            <button 
+              onClick={() => setImportMethod('privateKey')}
+              style={{ 
+                flex: 1, 
+                backgroundColor: importMethod === 'privateKey' ? '#007bff' : '#f8f9fa',
+                color: importMethod === 'privateKey' ? 'white' : 'black',
+                border: '1px solid #dee2e6',
+                padding: '0.5rem',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              {t('privateKey')}
+            </button>
+          </div>
+          
+          {importMethod === 'mnemonic' ? (
+            <textarea
+              placeholder="Enter mnemonic phrase (12, 15, 18, 21, or 24 words)"
+              value={inputMnemonic}
+              onChange={(e) => setInputMnemonic(e.target.value)}
+              style={{ width: '100%', minHeight: '80px', padding: '0.5rem' }}
+            />
+          ) : (
+            <input
+              type="password"
+              placeholder="Enter private key (64 hex characters)"
+              value={inputPrivateKey}
+              onChange={(e) => setInputPrivateKey(e.target.value)}
+              style={{ width: '100%', padding: '0.5rem' }}
+            />
+          )}
+          
           <button onClick={handleImport}>{t('import')}</button>
           <button onClick={backHome}>{t('cancel')}</button>
         </div>
       )}
       {view === 'setPassword' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {source === 'created' && (
-            <p><strong>Mnemonic:</strong> {walletInfo?.mnemonic}</p>
+          {source === 'created' && walletInfo?.mnemonic && (
+            <p><strong>Mnemonic:</strong> {walletInfo.mnemonic}</p>
           )}
           <p><strong>Address:</strong> {walletInfo?.address}</p>
           <input
@@ -623,11 +907,38 @@ const Popup: React.FC = () => {
       )}
       {view === 'wallet' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      {source === 'created' && (
-        <p><strong>Mnemonic:</strong> {walletInfo?.mnemonic}</p>
+      {source === 'created' && walletInfo?.mnemonic && (
+        <p><strong>Mnemonic:</strong> {walletInfo.mnemonic}</p>
       )}
       <p><strong>Address:</strong> {walletInfo?.address}</p>
-      <p><strong>Balance:</strong> {balance} ETH</p>
+      <p>
+        <strong>Balance:</strong> 
+        {balanceLoading ? (
+          <span style={{ color: '#007bff' }}>加载中...</span>
+        ) : balanceLoaded ? (
+          <span>{balance} ETH</span>
+        ) : (
+          <span style={{ color: '#6c757d' }}>未加载</span>
+        )}
+        {walletInfo?.address && (
+          <button 
+            onClick={() => loadBalance(walletInfo.address, network, true)}
+            disabled={balanceLoading}
+            style={{ 
+              marginLeft: '0.5rem', 
+              fontSize: '0.7rem', 
+              padding: '0.2rem 0.5rem',
+              backgroundColor: balanceLoading ? '#ccc' : '#28a745',
+              color: 'white',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: balanceLoading ? 'not-allowed' : 'pointer'
+            }}
+          >
+            {balanceLoading ? '刷新中...' : '刷新'}
+          </button>
+        )}
+      </p>
       {tokens.length > 0 && (
         <div>
           <p><strong>{t('tokens')}</strong></p>
@@ -656,10 +967,49 @@ const Popup: React.FC = () => {
           ))}
         </div>
       )}
-      <button onClick={() => setView('addToken')}>{t('addToken')}</button>
-      <button onClick={() => setView('send')}>{t('sendETH')}</button>
-      <button onClick={() => setView('activity')}>{t('activity')}</button>
-      <button onClick={logout}>{t('logout')}</button>
+             <button onClick={() => setView('addToken')}>{t('addToken')}</button>
+       <button onClick={() => setView('send')}>{t('sendETH')}</button>
+       <button onClick={() => setView('activity')}>{t('activity')}</button>
+       <button onClick={logout}>{t('logout')}</button>
+       <button 
+         onClick={() => {
+           console.log('Testing storage functionality...');
+           testStorage().then(() => {
+             console.log('Storage test completed');
+           }).catch((error) => {
+             console.error('Storage test error:', error);
+           });
+         }}
+         style={{ fontSize: '0.8rem', backgroundColor: '#ffc107', color: 'black' }}
+       >
+         测试存储功能
+       </button>
+       <button 
+         onClick={async () => {
+           console.log('Simple storage test...');
+           if (chrome?.storage?.local) {
+             console.log('Chrome storage API available');
+             try {
+               await chrome.storage.local.set({ simpleTest: 'test_value' });
+               console.log('Simple test write completed');
+               const result = await chrome.storage.local.get('simpleTest');
+               console.log('Simple test read result:', result);
+               if (result.simpleTest === 'test_value') {
+                 console.log('Simple storage test PASSED');
+               } else {
+                 console.log('Simple storage test FAILED');
+               }
+             } catch (error) {
+               console.error('Simple storage test error:', error);
+             }
+           } else {
+             console.log('Chrome storage API not available');
+           }
+         }}
+         style={{ fontSize: '0.8rem', backgroundColor: '#28a745', color: 'white' }}
+       >
+         简单存储测试
+       </button>
     </div>
   )}
   {view === 'send' && (
@@ -809,6 +1159,19 @@ const Popup: React.FC = () => {
       onBack={() => setView('wallet')}
       t={t}
     />
+  )}
+  {view === 'networks' && (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3>{t('networks')}</h3>
+        <button onClick={() => setView('wallet')}>{t('back')}</button>
+      </div>
+      <NetworkManager
+        onNetworkChange={handleNetworkManagerChange}
+        currentNetwork={network}
+        lang={lang}
+      />
+    </div>
   )}
   {view === 'confirmEthTransaction' && pendingTransaction && gasEstimate && (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
