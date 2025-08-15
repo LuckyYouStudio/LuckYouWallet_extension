@@ -15,5 +15,8 @@ export default {
   },
   permissions: [
     'storage'
+  ],
+  host_permissions: [
+    "<all_urls>"
   ]
 };

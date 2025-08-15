@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuckYou Wallet 扩展诊断</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #212529;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .diagnostic-section {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #007bff;
+        }
+        .diagnostic-section h3 {
+            margin-top: 0;
+            color: #007bff;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .log-box {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            margin-top: 20px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            margin: 5px;
+            transition: all 0.2s ease;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-success:hover {
+            background-color: #218838;
+        }
+        .btn-warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        .btn-warning:hover {
+            background-color: #e0a800;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        .info-box {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #007bff;
+        }
+        .wallet-selector {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 2px solid #dee2e6;
+        }
+        .wallet-option {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            margin: 10px 0;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .wallet-option:hover {
+            border-color: #007bff;
+            background-color: #f0f8ff;
+        }
+        .wallet-option.selected {
+            border-color: #28a745;
+            background-color: #f0fff0;
+        }
+        .wallet-icon {
+            font-size: 24px;
+            margin-right: 15px;
+            width: 40px;
+            text-align: center;
+        }
+        .wallet-info {
+            flex: 1;
+        }
+        .wallet-name {
+            font-weight: bold;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .wallet-description {
+            color: #666;
+            font-size: 14px;
+        }
+        .wallet-status {
+            margin-left: 15px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-available {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status-unavailable {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 LuckYou Wallet 扩展诊断工具</h1>
+        
+        <div class="info-box">
+            <strong>使用说明：</strong>
+            <ol>
+                <li>确保已安装 LuckYou Wallet 浏览器扩展</li>
+                <li>在扩展管理页面中启用扩展</li>
+                <li>选择要使用的钱包</li>
+                <li>点击"开始诊断"按钮</li>
+                <li>查看诊断结果和日志信息</li>
+            </ol>
+        </div>
+        
+        <!-- 钱包选择器 -->
+        <div class="wallet-selector">
+            <h3>🔐 选择钱包</h3>
+            <div id="walletOptions"></div>
+        </div>
+        
+        <div class="button-group">
+            <button class="btn-primary" onclick="startDiagnostic()">🔍 开始诊断</button>
+            <button class="btn-success" onclick="testConnection()">🔗 测试连接</button>
+            <button class="btn-warning" onclick="clearLogs()">🗑️ 清除日志</button>
+            <button class="btn-danger" onclick="resetDiagnostic()">🔄 重置诊断</button>
+        </div>
+        
+        <div id="diagnosticResults"></div>
+        
+        <div id="logs" class="log-box" style="display: none;"></div>
+    </div>
+
+    <script>
+        let diagnosticResults = {};
+        let logs = [];
+        let availableWallets = [];
+        let selectedWallet = null;
+        
+        // 添加日志
+        function addLog(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${type.toUpperCase()}: ${message}`;
+            logs.push(logEntry);
+            updateLogDisplay();
+            console.log(logEntry);
+        }
+        
+        // 更新日志显示
+        function updateLogDisplay() {
+            const logsEl = document.getElementById('logs');
+            logsEl.style.display = 'block';
+            logsEl.textContent = logs.join('\n');
+            logsEl.scrollTop = logsEl.scrollHeight;
+        }
+        
+        // 检测可用的钱包
+        function detectAvailableWallets() {
+            availableWallets = [];
+            
+            // 检测 MetaMask
+            if (window.ethereum && window.ethereum.isMetaMask) {
+                availableWallets.push({
+                    id: 'metamask',
+                    name: 'MetaMask',
+                    icon: '🦊',
+                    description: 'MetaMask 钱包扩展',
+                    provider: window.ethereum,
+                    isAvailable: true
+                });
+            }
+            
+            // 检测 LuckYou Wallet
+            if (window.ethereum && window.ethereum.isLuckYouWallet) {
+                availableWallets.push({
+                    id: 'luckyou',
+                    name: 'LuckYou Wallet',
+                    icon: '🍀',
+                    description: 'LuckYou Wallet 扩展 (通过 ethereum)',
+                    provider: window.ethereum,
+                    isAvailable: true
+                });
+            }
+            
+            // 检测 LuckYou Wallet (替代对象)
+            if (window.luckyouWallet && window.luckyouWallet.isLuckYouWallet) {
+                availableWallets.push({
+                    id: 'luckyou-alt',
+                    name: 'LuckYou Wallet',
+                    icon: '🍀',
+                    description: 'LuckYou Wallet 扩展 (替代对象)',
+                    provider: window.luckyouWallet,
+                    isAvailable: true
+                });
+            }
+            
+            // 检测其他可能的钱包
+            if (window.web3) {
+                availableWallets.push({
+                    id: 'web3',
+                    name: 'Web3 Provider',
+                    icon: '🌐',
+                    description: '通用 Web3 提供者',
+                    provider: window.web3,
+                    isAvailable: true
+                });
+            }
+            
+            // 如果没有检测到任何钱包
+            if (availableWallets.length === 0) {
+                availableWallets.push({
+                    id: 'none',
+                    name: '无可用钱包',
+                    icon: '❌',
+                    description: '请安装并启用钱包扩展',
+                    provider: null,
+                    isAvailable: false
+                });
+            }
+            
+            // 默认选择第一个可用的钱包
+            if (availableWallets.length > 0 && availableWallets[0].isAvailable) {
+                selectedWallet = availableWallets[0];
+            }
+            
+            addLog(`检测到 ${availableWallets.length} 个钱包`);
+            renderWalletOptions();
+        }
+        
+        // 渲染钱包选择器
+        function renderWalletOptions() {
+            const container = document.getElementById('walletOptions');
+            let html = '';
+            
+            availableWallets.forEach(wallet => {
+                const isSelected = selectedWallet && selectedWallet.id === wallet.id;
+                const statusClass = wallet.isAvailable ? 'status-available' : 'status-unavailable';
+                const statusText = wallet.isAvailable ? '可用' : '不可用';
+                
+                html += `
+                    <div class="wallet-option ${isSelected ? 'selected' : ''}" 
+                         onclick="selectWallet('${wallet.id}')">
+                        <div class="wallet-icon">${wallet.icon}</div>
+                        <div class="wallet-info">
+                            <div class="wallet-name">${wallet.name}</div>
+                            <div class="wallet-description">${wallet.description}</div>
+                        </div>
+                        <div class="wallet-status ${statusClass}">${statusText}</div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        // 选择钱包
+        function selectWallet(walletId) {
+            const wallet = availableWallets.find(w => w.id === walletId);
+            if (wallet && wallet.isAvailable) {
+                selectedWallet = wallet;
+                addLog(`选择钱包: ${wallet.name}`);
+                renderWalletOptions();
+            }
+        }
+        
+        // 获取当前选中的钱包提供者
+        function getCurrentProvider() {
+            if (!selectedWallet || !selectedWallet.isAvailable) {
+                throw new Error('没有选择可用的钱包');
+            }
+            return selectedWallet.provider;
+        }
+        
+        // 开始诊断
+        async function startDiagnostic() {
+            addLog('开始扩展诊断...');
+            diagnosticResults = {};
+            
+            // 诊断1：检查选中的钱包
+            addLog(`检查选中的钱包: ${selectedWallet ? selectedWallet.name : '无'}`);
+            if (selectedWallet && selectedWallet.isAvailable) {
+                diagnosticResults.selectedWallet = {
+                    status: 'success',
+                    message: `已选择钱包: ${selectedWallet.name}`,
+                    details: {
+                        id: selectedWallet.id,
+                        name: selectedWallet.name,
+                        description: selectedWallet.description,
+                        provider: selectedWallet.provider ? '可用' : '不可用'
+                    }
+                };
+                addLog(`✅ 已选择钱包: ${selectedWallet.name}`);
+            } else {
+                diagnosticResults.selectedWallet = {
+                    status: 'error',
+                    message: '没有选择可用的钱包'
+                };
+                addLog('❌ 没有选择可用的钱包');
+                return;
+            }
+            
+            // 诊断2：检查钱包提供者
+            addLog('检查钱包提供者...');
+            try {
+                const provider = getCurrentProvider();
+                diagnosticResults.provider = {
+                    status: 'success',
+                    message: '钱包提供者可用',
+                    details: {
+                        isMetaMask: provider.isMetaMask,
+                        isLuckYouWallet: provider.isLuckYouWallet,
+                        isConnected: provider.isConnected ? provider.isConnected() : 'N/A',
+                        selectedAddress: provider.selectedAddress,
+                        chainId: provider.chainId,
+                        networkVersion: provider.networkVersion
+                    }
+                };
+                addLog('✅ 钱包提供者可用');
+            } catch (error) {
+                diagnosticResults.provider = {
+                    status: 'error',
+                    message: '钱包提供者不可用',
+                    details: error.message
+                };
+                addLog('❌ 钱包提供者不可用: ' + error.message);
+                return;
+            }
+            
+            // 诊断3：检查网络请求能力
+            addLog('检查网络请求能力...');
+            try {
+                const provider = getCurrentProvider();
+                const chainId = await provider.request({ method: 'eth_chainId' });
+                diagnosticResults.networkTest = {
+                    status: 'success',
+                    message: '网络请求测试成功',
+                    details: { chainId, method: 'eth_chainId' }
+                };
+                addLog('✅ 网络请求测试成功');
+            } catch (error) {
+                diagnosticResults.networkTest = {
+                    status: 'error',
+                    message: '网络请求测试失败',
+                    details: error.message
+                };
+                addLog('❌ 网络请求测试失败: ' + error.message);
+            }
+            
+            // 诊断4：检查页面环境
+            addLog('检查页面环境...');
+            diagnosticResults.pageEnvironment = {
+                status: 'info',
+                message: '页面环境信息',
+                details: {
+                    url: window.location.href,
+                    protocol: window.location.protocol,
+                    hostname: window.location.hostname,
+                    userAgent: navigator.userAgent,
+                    isLocalFile: window.location.protocol === 'file:',
+                    isSecure: window.location.protocol === 'https:',
+                    selectedWallet: selectedWallet ? selectedWallet.name : '无'
+                }
+            };
+            addLog('ℹ️ 页面环境检查完成');
+            
+            // 显示诊断结果
+            displayDiagnosticResults();
+            addLog('诊断完成！');
+        }
+        
+        // 测试连接
+        async function testConnection() {
+            addLog('开始测试钱包连接...');
+            
+            try {
+                if (!selectedWallet || !selectedWallet.isAvailable) {
+                    throw new Error('没有选择可用的钱包');
+                }
+                
+                const provider = getCurrentProvider();
+                addLog(`请求连接钱包: ${selectedWallet.name}`);
+                
+                const accounts = await provider.request({ method: 'eth_requestAccounts' });
+                
+                addLog('连接成功！账户: ' + accounts.join(', '));
+                diagnosticResults.connectionTest = {
+                    status: 'success',
+                    message: '钱包连接测试成功',
+                    details: { 
+                        wallet: selectedWallet.name,
+                        accounts: accounts 
+                    }
+                };
+                
+            } catch (error) {
+                addLog('连接测试失败: ' + error.message);
+                diagnosticResults.connectionTest = {
+                    status: 'error',
+                    message: '钱包连接测试失败',
+                    details: error.message
+                };
+            }
+            
+            displayDiagnosticResults();
+        }
+        
+        // 显示诊断结果
+        function displayDiagnosticResults() {
+            const resultsEl = document.getElementById('diagnosticResults');
+            let html = '<h2>📊 诊断结果</h2>';
+            
+            for (const [key, result] of Object.entries(diagnosticResults)) {
+                const statusClass = result.status || 'info';
+                const statusIcon = {
+                    'success': '✅',
+                    'error': '❌',
+                    'warning': '⚠️',
+                    'info': 'ℹ️'
+                }[statusClass] || 'ℹ️';
+                
+                html += `
+                    <div class="diagnostic-section">
+                        <h3>${statusIcon} ${key.charAt(0).toUpperCase() + key.slice(1)}</h3>
+                        <div class="status ${statusClass}">
+                            ${result.message}
+                        </div>
+                        ${result.details ? `<pre>${JSON.stringify(result.details, null, 2)}</pre>` : ''}
+                    </div>
+                `;
+            }
+            
+            resultsEl.innerHTML = html;
+        }
+        
+        // 清除日志
+        function clearLogs() {
+            logs = [];
+            updateLogDisplay();
+            addLog('日志已清除');
+        }
+        
+        // 重置诊断
+        function resetDiagnostic() {
+            diagnosticResults = {};
+            logs = [];
+            document.getElementById('diagnosticResults').innerHTML = '';
+            document.getElementById('logs').style.display = 'none';
+            addLog('诊断已重置');
+        }
+        
+        // 页面加载时自动检测钱包
+        window.addEventListener('load', () => {
+            addLog('页面加载完成，开始检测钱包...');
+            addLog('当前页面URL: ' + window.location.href);
+            addLog('当前协议: ' + window.location.protocol);
+            
+            // 延迟检测，确保扩展有足够时间注入
+            setTimeout(() => {
+                detectAvailableWallets();
+            }, 1000);
+        });
+        
+        // 监听ethereum#initialized事件
+        window.addEventListener('ethereum#initialized', () => {
+            addLog('检测到 ethereum#initialized 事件');
+            detectAvailableWallets();
+        });
+        
+        // 监听ethereum对象变化
+        let ethereumCheckInterval = setInterval(() => {
+            if (window.ethereum && availableWallets.length === 0) {
+                addLog('检测到 ethereum 对象动态注入');
+                clearInterval(ethereumCheckInterval);
+                detectAvailableWallets();
+            }
+        }, 1000);
+        
+        // 10秒后停止检查
+        setTimeout(() => {
+            clearInterval(ethereumCheckInterval);
+            if (availableWallets.length === 0) {
+                addLog('ethereum 对象检查超时，尝试重新检测');
+                detectAvailableWallets();
+            }
+        }, 10000);
+    </script>
+</body>
+</html>

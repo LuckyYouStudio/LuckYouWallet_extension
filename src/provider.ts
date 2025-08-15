@@ -13,12 +13,6 @@
   // 存储待处理的请求
   const pendingRequests = new Map();
 
-  // 检查是否已存在ethereum对象
-  if (window.ethereum) {
-    console.log('[LuckYou Wallet] Ethereum provider already exists');
-    return;
-  }
-
   // 创建以太坊provider
   const ethereum = {
     // 基本属性
@@ -197,12 +191,27 @@
     }).catch(console.error);
   });
 
-  // 注入到window对象
-  Object.defineProperty(window, 'ethereum', {
-    value: ethereum,
-    writable: false,
-    configurable: false
-  });
+  // 检查是否已存在ethereum对象
+  if (window.ethereum) {
+    console.log('[LuckYou Wallet] Ethereum provider already exists, adding LuckYou Wallet as alternative');
+    
+    // 将LuckYou Wallet作为替代provider添加到window对象
+    Object.defineProperty(window, 'luckyouWallet', {
+      value: ethereum,
+      writable: false,
+      configurable: false
+    });
+    
+    // 不替换现有的ethereum对象，让MetaMask等钱包保持可用
+    console.log('[LuckYou Wallet] Keeping existing ethereum provider, LuckYou Wallet available as luckyouWallet');
+  } else {
+    // 注入到window对象
+    Object.defineProperty(window, 'ethereum', {
+      value: ethereum,
+      writable: false,
+      configurable: false
+    });
+  }
 
   // 触发provider检测事件
   window.dispatchEvent(new Event('ethereum#initialized'));
