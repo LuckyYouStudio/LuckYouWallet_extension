@@ -12,19 +12,8 @@ import {
   getAddress,
 } from 'ethers';
 
-// Chrome API 类型声明
-declare global {
-  const chrome: {
-    storage: {
-      local: {
-        get(keys?: string | string[] | object | null): Promise<{ [key: string]: any }>;
-        set(items: object): Promise<void>;
-        remove(keys: string | string[]): Promise<void>;
-        clear(): Promise<void>;
-      };
-    };
-  };
-}
+// 使用 any 类型避免 Chrome API 类型冲突
+declare const chrome: any;
 
 export interface NetworkConfig {
   name: string;
@@ -52,14 +41,14 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
   },
   polygon: {
     name: 'Polygon',
-    rpcUrl: 'https://polygon.llamarpc.com',
+    rpcUrl: 'https://polygon-rpc.com',
     chainId: 137,
     currencySymbol: 'MATIC',
     blockExplorer: 'https://polygonscan.com',
   },
   bsc: {
     name: 'BNB Smart Chain',
-    rpcUrl: 'https://bsc-dataseed.binance.org',
+    rpcUrl: 'https://bsc-dataseed1.binance.org',
     chainId: 56,
     currencySymbol: 'BNB',
     blockExplorer: 'https://bscscan.com',
@@ -77,13 +66,6 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
     chainId: 10,
     currencySymbol: 'ETH',
     blockExplorer: 'https://optimistic.etherscan.io',
-  },
-  hardhat: {
-    name: 'Local Hardhat',
-    rpcUrl: 'http://127.0.0.1:8545',
-    chainId: 31337,
-    currencySymbol: 'ETH',
-    blockExplorer: '',
   },
 } as const;
 
@@ -322,25 +304,40 @@ export async function getEthBalance(address: string, network: NetworkKey): Promi
   console.log(`[BALANCE DEBUG] Network config:`, networkConfig);
   console.log(`[BALANCE DEBUG] RPC URL: ${networkConfig.rpcUrl}`);
   
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  // 添加重试机制
+  const maxRetries = 3;
+  let lastError: any;
   
-  try {
-    console.log(`[BALANCE DEBUG] Getting balance from provider...`);
-    const balance = await provider.getBalance(address);
-    console.log(`[BALANCE DEBUG] Raw balance from provider:`, balance);
-    console.log(`[BALANCE DEBUG] Balance type:`, typeof balance);
-    
-    const normalized = typeof balance === 'bigint' ? balance : BigInt(balance as any);
-    console.log(`[BALANCE DEBUG] Normalized balance:`, normalized);
-    
-    const formatted = formatEther(normalized);
-    console.log(`[BALANCE DEBUG] Formatted balance: ${formatted} ETH`);
-    
-    return formatted;
-  } catch (error) {
-    console.error(`[BALANCE DEBUG] Error getting balance:`, error);
-    throw error;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[BALANCE DEBUG] Attempt ${attempt}/${maxRetries} - Getting balance from provider...`);
+      
+      const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+      
+      const balance = await provider.getBalance(address);
+      console.log(`[BALANCE DEBUG] Raw balance from provider:`, balance);
+      console.log(`[BALANCE DEBUG] Balance type:`, typeof balance);
+      
+      const normalized = typeof balance === 'bigint' ? balance : BigInt(balance as any);
+      console.log(`[BALANCE DEBUG] Normalized balance:`, normalized);
+      
+      const formatted = formatEther(normalized);
+      console.log(`[BALANCE DEBUG] Formatted balance: ${formatted} ETH`);
+      
+      return formatted;
+    } catch (error) {
+      lastError = error;
+      console.error(`[BALANCE DEBUG] Attempt ${attempt} failed:`, error);
+      
+      if (attempt < maxRetries) {
+        console.log(`[BALANCE DEBUG] Retrying in 1 second...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
   }
+  
+  console.error(`[BALANCE DEBUG] All ${maxRetries} attempts failed. Last error:`, lastError);
+  throw new Error(`Failed to get balance after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
 }
 
 export async function sendEth(

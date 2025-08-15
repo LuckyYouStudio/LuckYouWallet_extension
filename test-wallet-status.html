@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wallet Status Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .status-card {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border-color: #ffeaa7;
+            color: #856404;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .wallet-info {
+            background-color: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Wallet Status Test</h1>
+    <p>This page tests the current status of your LuckYou Wallet extension.</p>
+    
+    <button onclick="testWalletStatus()">Test Wallet Status</button>
+    <button onclick="testConnection()">Test Connection</button>
+    <button onclick="testNetworkInfo()">Test Network Info</button>
+    <button onclick="clearResults()">Clear Results</button>
+    
+    <div id="results"></div>
+
+    <script>
+        function addResult(message, type = 'info') {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `status-card ${type}`;
+            resultDiv.innerHTML = message;
+            resultsDiv.appendChild(resultDiv);
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        async function testWalletStatus() {
+            clearResults();
+            addResult('<strong>Testing Wallet Status...</strong>', 'info');
+
+            // 检查 window.ethereum
+            if (window.ethereum) {
+                addResult('✅ window.ethereum found', 'success');
+                
+                // 检查是否是 LuckYou Wallet
+                if (window.ethereum.isLuckYouWallet) {
+                    addResult('✅ LuckYou Wallet detected', 'success');
+                } else {
+                    addResult('⚠️ Other wallet detected (MetaMask, etc.)', 'warning');
+                }
+
+                // 显示钱包信息
+                const walletInfo = `
+                    <div class="wallet-info">
+                        <h3>Wallet Information:</h3>
+                        <p><strong>isMetaMask:</strong> ${window.ethereum.isMetaMask}</p>
+                        <p><strong>isLuckYouWallet:</strong> ${window.ethereum.isLuckYouWallet}</p>
+                        <p><strong>Network Version:</strong> ${window.ethereum.networkVersion || 'Not set'}</p>
+                        <p><strong>Chain ID:</strong> ${window.ethereum.chainId || 'Not set'}</p>
+                        <p><strong>Selected Address:</strong> ${window.ethereum.selectedAddress || 'Not connected'}</p>
+                        <p><strong>Is Connected:</strong> ${window.ethereum.isConnected()}</p>
+                    </div>
+                `;
+                addResult(walletInfo, 'info');
+            } else {
+                addResult('❌ window.ethereum not found', 'error');
+            }
+
+            // 检查 window.luckyouWallet
+            if (window.luckyouWallet) {
+                addResult('✅ window.luckyouWallet found', 'success');
+            } else {
+                addResult('ℹ️ window.luckyouWallet not found', 'info');
+            }
+        }
+
+        async function testConnection() {
+            addResult('<strong>Testing Wallet Connection...</strong>', 'info');
+
+            if (!window.ethereum) {
+                addResult('❌ No wallet found to test connection', 'error');
+                return;
+            }
+
+            try {
+                // 测试获取账户
+                addResult('Requesting accounts...', 'info');
+                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                
+                if (accounts && accounts.length > 0) {
+                    addResult(`✅ Connected! Account: ${accounts[0]}`, 'success');
+                } else {
+                    addResult('ℹ️ No accounts found (wallet not connected)', 'warning');
+                    
+                    // 尝试请求连接
+                    addResult('Requesting connection...', 'info');
+                    try {
+                        const connectedAccounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                        if (connectedAccounts && connectedAccounts.length > 0) {
+                            addResult(`✅ Successfully connected! Account: ${connectedAccounts[0]}`, 'success');
+                        } else {
+                            addResult('❌ Connection failed or rejected', 'error');
+                        }
+                    } catch (error) {
+                        addResult(`❌ Connection error: ${error.message}`, 'error');
+                    }
+                }
+            } catch (error) {
+                addResult(`❌ Error testing connection: ${error.message}`, 'error');
+            }
+        }
+
+        async function testNetworkInfo() {
+            addResult('<strong>Testing Network Information...</strong>', 'info');
+
+            if (!window.ethereum) {
+                addResult('❌ No wallet found to test network info', 'error');
+                return;
+            }
+
+            try {
+                // 测试获取链ID
+                addResult('Getting chain ID...', 'info');
+                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                addResult(`✅ Chain ID: ${chainId}`, 'success');
+
+                // 测试获取网络版本
+                addResult('Getting network version...', 'info');
+                const networkVersion = await window.ethereum.request({ method: 'net_version' });
+                addResult(`✅ Network Version: ${networkVersion}`, 'success');
+
+                // 测试获取余额（如果有账户）
+                if (window.ethereum.selectedAddress) {
+                    addResult('Getting balance...', 'info');
+                    const balance = await window.ethereum.request({
+                        method: 'eth_getBalance',
+                        params: [window.ethereum.selectedAddress, 'latest']
+                    });
+                    addResult(`✅ Balance: ${balance}`, 'success');
+                } else {
+                    addResult('ℹ️ No account selected, skipping balance check', 'info');
+                }
+            } catch (error) {
+                addResult(`❌ Error testing network info: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载时自动测试
+        window.addEventListener('load', () => {
+            setTimeout(testWalletStatus, 1000);
+        });
+    </script>
+</body>
+</html>

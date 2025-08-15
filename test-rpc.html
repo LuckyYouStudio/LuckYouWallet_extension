@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPC Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .loading {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>RPC Connection Test</h1>
+    <p>This page tests the RPC endpoints used by the wallet extension.</p>
+    
+    <button onclick="testAllRPCs()">Test All RPCs</button>
+    <button onclick="clearResults()">Clear Results</button>
+    
+    <div id="results"></div>
+
+    <script>
+        const RPC_ENDPOINTS = {
+            'Ethereum Mainnet': 'https://cloudflare-eth.com',
+            'Sepolia Testnet': 'https://rpc.sepolia.org',
+            'Polygon': 'https://polygon-rpc.com',
+            'BSC': 'https://bsc-dataseed1.binance.org',
+            'Arbitrum': 'https://arb1.arbitrum.io/rpc',
+            'Optimism': 'https://mainnet.optimism.io'
+        };
+
+        function addResult(name, status, message) {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `test-result ${status}`;
+            resultDiv.innerHTML = `<strong>${name}:</strong> ${message}`;
+            resultsDiv.appendChild(resultDiv);
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        async function testRPC(name, url) {
+            addResult(name, 'loading', 'Testing...');
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        method: 'eth_blockNumber',
+                        params: [],
+                        id: 1
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(`RPC Error: ${data.error.message}`);
+                }
+
+                if (data.result) {
+                    const blockNumber = parseInt(data.result, 16);
+                    addResult(name, 'success', `Connected! Latest block: ${blockNumber.toLocaleString()}`);
+                } else {
+                    throw new Error('No result received');
+                }
+            } catch (error) {
+                addResult(name, 'error', `Failed: ${error.message}`);
+            }
+        }
+
+        async function testAllRPCs() {
+            clearResults();
+            
+            for (const [name, url] of Object.entries(RPC_ENDPOINTS)) {
+                await testRPC(name, url);
+                // 添加小延迟避免同时发送太多请求
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+
+        // 页面加载时自动测试
+        window.addEventListener('load', () => {
+            setTimeout(testAllRPCs, 1000);
+        });
+    </script>
+</body>
+</html>

@@ -4,6 +4,21 @@ console.log('[LuckYou Wallet] Background script loaded');
 // 存储待处理的请求
 const pendingRequests = new Map();
 
+// 动态导入钱包核心模块
+let walletModule: any = null;
+
+async function getWalletModule() {
+  if (!walletModule) {
+    try {
+      walletModule = await import('./core/wallet');
+    } catch (error) {
+      console.error('[LuckYou Wallet] Failed to load wallet module:', error);
+      return null;
+    }
+  }
+  return walletModule;
+}
+
 // 监听来自content script的消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[LuckYou Wallet] Background received message:', message);
@@ -126,9 +141,16 @@ async function requestTransactionSignature(requestId: string, request: any) {
 // 获取网络信息
 async function getNetworkInfo() {
   try {
-    const { getCurrentNetwork, getAllNetworks } = await import('./core/wallet');
-    const currentNetwork = await getCurrentNetwork();
-    const allNetworks = await getAllNetworks();
+    const wallet = await getWalletModule();
+    if (!wallet) {
+      return {
+        jsonrpc: '2.0',
+        result: '0x1' // 默认返回mainnet
+      };
+    }
+    
+    const currentNetwork = await wallet.getCurrentNetwork();
+    const allNetworks = await wallet.getAllNetworks();
     const networkConfig = allNetworks[currentNetwork];
     
     return {
@@ -136,6 +158,7 @@ async function getNetworkInfo() {
       result: networkConfig.chainId
     };
   } catch (error) {
+    console.error('[LuckYou Wallet] Error getting network info:', error);
     return {
       jsonrpc: '2.0',
       result: '0x1' // 默认返回mainnet
@@ -146,9 +169,13 @@ async function getNetworkInfo() {
 // 调用RPC
 async function callRPC(request: any) {
   try {
-    const { getCurrentNetwork, getAllNetworks } = await import('./core/wallet');
-    const currentNetwork = await getCurrentNetwork();
-    const allNetworks = await getAllNetworks();
+    const wallet = await getWalletModule();
+    if (!wallet) {
+      throw new Error('Wallet module not available');
+    }
+    
+    const currentNetwork = await wallet.getCurrentNetwork();
+    const allNetworks = await wallet.getAllNetworks();
     const networkConfig = allNetworks[currentNetwork];
     
     const response = await fetch(networkConfig.rpcUrl, {
@@ -161,6 +188,7 @@ async function callRPC(request: any) {
     
     return await response.json();
   } catch (error) {
+    console.error('[LuckYou Wallet] RPC call failed:', error);
     return {
       jsonrpc: '2.0',
       id: request.id,
@@ -255,13 +283,21 @@ async function openPopupForSignature(requestId: string, request: any) {
 // 获取钱包数据
 async function getWalletData() {
   try {
+    // 首先尝试从 chrome.storage.local 获取
     const result = await chrome.storage.local.get('wallet_session');
     if (result.wallet_session) {
       const walletSession = JSON.parse(result.wallet_session);
       return walletSession.info;
     }
+    
+    // 如果 chrome.storage.local 中没有，尝试从 localStorage 获取
+    // 注意：background script 无法直接访问 localStorage，需要通过 content script
+    console.log('[LuckYou Wallet] No wallet found in chrome.storage.local, checking localStorage...');
+    
+    // 返回 null，让 content script 处理
     return null;
   } catch (error) {
+    console.error('[LuckYou Wallet] Error getting wallet data:', error);
     return null;
   }
 }

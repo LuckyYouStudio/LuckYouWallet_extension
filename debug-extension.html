@@ -249,7 +249,7 @@
                 });
             }
             
-            // 检测 LuckYou Wallet
+            // 检测 LuckYou Wallet (通过 ethereum)
             if (window.ethereum && window.ethereum.isLuckYouWallet) {
                 availableWallets.push({
                     id: 'luckyou',
@@ -269,6 +269,19 @@
                     icon: '🍀',
                     description: 'LuckYou Wallet 扩展 (替代对象)',
                     provider: window.luckyouWallet,
+                    isAvailable: true
+                });
+            }
+            
+            // 检测 LuckYou Wallet (通用检测)
+            if (window.ethereum && !window.ethereum.isMetaMask && !window.ethereum.isLuckYouWallet) {
+                // 可能是我们的扩展，但没有正确设置 isLuckYouWallet 属性
+                availableWallets.push({
+                    id: 'luckyou-generic',
+                    name: 'LuckYou Wallet (通用)',
+                    icon: '🍀',
+                    description: 'LuckYou Wallet 扩展 (通用检测)',
+                    provider: window.ethereum,
                     isAvailable: true
                 });
             }

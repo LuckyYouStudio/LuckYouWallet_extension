@@ -375,13 +375,24 @@ const Popup: React.FC = () => {
     loadTokenHistory();
   }, [selectedToken, walletInfo, network]);
 
-  const saveSession = (info: WalletInfo, src: 'created' | 'imported') => {
+  const saveSession = async (info: WalletInfo, src: 'created' | 'imported') => {
     const session: WalletSession = {
       info,
       source: src,
       timestamp: Date.now(),
     };
+    
+    // 存储到 localStorage
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    
+    // 同时存储到 chrome.storage.local 供 background script 使用
+    try {
+      await chrome.storage.local.set({ wallet_session: JSON.stringify(session) });
+      console.log('[LuckYou Wallet] Wallet session saved to chrome.storage.local');
+    } catch (error) {
+      console.error('[LuckYou Wallet] Failed to save wallet session to chrome.storage.local:', error);
+    }
+    
     startSessionTimer(SESSION_TTL);
   };
 
@@ -574,7 +585,7 @@ const Popup: React.FC = () => {
       const stored: StoredWallet = { source, encrypted };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
       setEncryptedWallet(encrypted);
-      saveSession(walletInfo, source);
+      await saveSession(walletInfo, source);
       setPassword('');
       setConfirmPassword('');
       setView('wallet');
@@ -588,7 +599,7 @@ const Popup: React.FC = () => {
     try {
       const w = await decryptWallet(encryptedWallet, unlockPassword);
       setWalletInfo(w);
-      if (source) saveSession(w, source);
+      if (source) await saveSession(w, source);
       setUnlockPassword('');
       setView('wallet');
     } catch (e) {

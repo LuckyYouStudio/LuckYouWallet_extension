@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "build": "vite build",
+    "build:extension": "npm run build && node build-extension.js",
+    "test:extension": "node test-extension.js",
     "dev": "vite",
     "test": "echo \"No tests specified\""
   },
@@ -15,6 +17,7 @@
   "devDependencies": {
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
+    "@types/chrome": "^0.0.254",
     "@vitejs/plugin-react": "^4.0.0",
     "@crxjs/vite-plugin": "^2.0.0",
     "typescript": "^5.0.0",

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wallet Detection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .wallet-info {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Wallet Detection Test</h1>
+    <p>This page tests if the LuckYou Wallet extension is properly detected by Web3 applications.</p>
+    
+    <button onclick="testWalletDetection()">Test Wallet Detection</button>
+    <button onclick="testConnection()">Test Connection</button>
+    <button onclick="clearResults()">Clear Results</button>
+    
+    <div id="results"></div>
+
+    <script>
+        function addResult(message, type = 'info') {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `test-result ${type}`;
+            resultDiv.innerHTML = message;
+            resultsDiv.appendChild(resultDiv);
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        function testWalletDetection() {
+            clearResults();
+            addResult('<strong>Testing Wallet Detection...</strong>', 'info');
+
+            // 检查 window.ethereum
+            if (window.ethereum) {
+                addResult('✅ window.ethereum found', 'success');
+                
+                // 检查是否是 LuckYou Wallet
+                if (window.ethereum.isLuckYouWallet) {
+                    addResult('✅ LuckYou Wallet detected', 'success');
+                } else {
+                    addResult('⚠️ Other wallet detected (MetaMask, etc.)', 'info');
+                }
+
+                // 显示钱包信息
+                const walletInfo = `
+                    <div class="wallet-info">
+                        <h3>Wallet Information:</h3>
+                        <p><strong>isMetaMask:</strong> ${window.ethereum.isMetaMask}</p>
+                        <p><strong>isLuckYouWallet:</strong> ${window.ethereum.isLuckYouWallet}</p>
+                        <p><strong>Network Version:</strong> ${window.ethereum.networkVersion || 'Not set'}</p>
+                        <p><strong>Chain ID:</strong> ${window.ethereum.chainId || 'Not set'}</p>
+                        <p><strong>Selected Address:</strong> ${window.ethereum.selectedAddress || 'Not connected'}</p>
+                        <p><strong>Is Connected:</strong> ${window.ethereum.isConnected()}</p>
+                    </div>
+                `;
+                addResult(walletInfo, 'info');
+            } else {
+                addResult('❌ window.ethereum not found', 'error');
+            }
+
+            // 检查 window.luckyouWallet
+            if (window.luckyouWallet) {
+                addResult('✅ window.luckyouWallet found', 'success');
+            } else {
+                addResult('ℹ️ window.luckyouWallet not found (this is normal if no other wallet exists)', 'info');
+            }
+
+            // 检查常见的事件监听器
+            addResult('<strong>Testing Event Listeners...</strong>', 'info');
+            
+            const testEvent = new Event('ethereum#initialized');
+            window.dispatchEvent(testEvent);
+            addResult('✅ ethereum#initialized event dispatched', 'success');
+        }
+
+        async function testConnection() {
+            addResult('<strong>Testing Wallet Connection...</strong>', 'info');
+
+            if (!window.ethereum) {
+                addResult('❌ No wallet found to test connection', 'error');
+                return;
+            }
+
+            try {
+                // 测试获取账户
+                addResult('Requesting accounts...', 'info');
+                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                
+                if (accounts && accounts.length > 0) {
+                    addResult(`✅ Connected! Account: ${accounts[0]}`, 'success');
+                } else {
+                    addResult('ℹ️ No accounts found (wallet not connected)', 'info');
+                    
+                    // 尝试请求连接
+                    addResult('Requesting connection...', 'info');
+                    try {
+                        const connectedAccounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                        if (connectedAccounts && connectedAccounts.length > 0) {
+                            addResult(`✅ Successfully connected! Account: ${connectedAccounts[0]}`, 'success');
+                        } else {
+                            addResult('❌ Connection failed or rejected', 'error');
+                        }
+                    } catch (error) {
+                        addResult(`❌ Connection error: ${error.message}`, 'error');
+                    }
+                }
+            } catch (error) {
+                addResult(`❌ Error testing connection: ${error.message}`, 'error');
+            }
+        }
+
+        // 监听钱包事件
+        if (window.ethereum) {
+            window.ethereum.on('accountsChanged', (accounts) => {
+                addResult(`🔄 Accounts changed: ${accounts.length > 0 ? accounts[0] : 'No accounts'}`, 'info');
+            });
+
+            window.ethereum.on('chainChanged', (chainId) => {
+                addResult(`🔄 Chain changed: ${chainId}`, 'info');
+            });
+
+            window.ethereum.on('connect', (connectInfo) => {
+                addResult(`🔗 Connected: ${JSON.stringify(connectInfo)}`, 'success');
+            });
+
+            window.ethereum.on('disconnect', (error) => {
+                addResult(`🔌 Disconnected: ${error.message}`, 'error');
+            });
+        }
+
+        // 页面加载时自动测试
+        window.addEventListener('load', () => {
+            setTimeout(testWalletDetection, 1000);
+        });
+    </script>
+</body>
+</html>
