@@ -9,6 +9,7 @@ import {
   setCurrentNetwork,
   validateNetwork,
   DEFAULT_NETWORKS,
+  updateCustomNetwork,
 } from '../core/wallet';
 import { translations, Lang, TranslationKey } from '../core/i18n';
 import './NetworkManager.css';
@@ -26,7 +27,15 @@ const NetworkManager: React.FC<NetworkManagerProps> = ({
 }) => {
   const [networks, setNetworks] = useState<Record<string, NetworkConfig>>({});
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingNetwork, setEditingNetwork] = useState<string | null>(null);
   const [newNetwork, setNewNetwork] = useState({
+    name: '',
+    rpcUrl: '',
+    chainId: '',
+    currencySymbol: '',
+    blockExplorer: '',
+  });
+  const [editNetwork, setEditNetwork] = useState({
     name: '',
     rpcUrl: '',
     chainId: '',
@@ -104,6 +113,77 @@ const NetworkManager: React.FC<NetworkManagerProps> = ({
     } finally {
       setValidating(false);
     }
+  };
+
+  const handleEditNetwork = (networkKey: string, network: NetworkConfig) => {
+    setEditingNetwork(networkKey);
+    setEditNetwork({
+      name: network.name,
+      rpcUrl: network.rpcUrl,
+      chainId: network.chainId.toString(),
+      currencySymbol: network.currencySymbol,
+      blockExplorer: network.blockExplorer || '',
+    });
+  };
+
+  const handleUpdateNetwork = async () => {
+    if (!editNetwork.name || !editNetwork.rpcUrl || !editNetwork.chainId || !editNetwork.currencySymbol) {
+      setValidationError('请填写所有必填字段');
+      return;
+    }
+
+    const chainId = parseInt(editNetwork.chainId);
+    if (isNaN(chainId) || chainId <= 0) {
+      setValidationError('链ID必须是有效的正整数');
+      return;
+    }
+
+    if (!editingNetwork) return;
+
+    setValidating(true);
+    setValidationError(null);
+
+    try {
+      const isValid = await validateNetwork(editNetwork.rpcUrl, chainId);
+      if (!isValid) {
+        setValidationError('网络验证失败，请检查RPC URL和链ID');
+        return;
+      }
+
+      await updateCustomNetwork(editingNetwork, {
+        name: editNetwork.name,
+        rpcUrl: editNetwork.rpcUrl,
+        chainId,
+        currencySymbol: editNetwork.currencySymbol,
+        blockExplorer: editNetwork.blockExplorer || undefined,
+      });
+
+      setEditingNetwork(null);
+      setEditNetwork({
+        name: '',
+        rpcUrl: '',
+        chainId: '',
+        currencySymbol: '',
+        blockExplorer: '',
+      });
+      await loadNetworks();
+    } catch (error) {
+      setValidationError('更新网络失败: ' + (error as Error).message);
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const cancelEdit = () => {
+    setEditingNetwork(null);
+    setEditNetwork({
+      name: '',
+      rpcUrl: '',
+      chainId: '',
+      currencySymbol: '',
+      blockExplorer: '',
+    });
+    setValidationError(null);
   };
 
   const handleRemoveNetwork = async (chainId: number) => {
@@ -206,39 +286,120 @@ const NetworkManager: React.FC<NetworkManagerProps> = ({
             key={key}
             className={`network-item ${currentNetwork === key ? 'active' : ''}`}
           >
-            <div className="network-info">
-              <div className="network-name">
-                {network.name}
-                {network.isCustom && <span className="custom-badge">{t('custom')}</span>}
+            {editingNetwork === key ? (
+              <div className="edit-network-form">
+                <h4>{t('editNetwork')}</h4>
+                <div className="form-group">
+                  <label>{t('networkName')}</label>
+                  <input
+                    type="text"
+                    value={editNetwork.name}
+                    onChange={(e) => setEditNetwork({ ...editNetwork, name: e.target.value })}
+                    placeholder={t('enterNetworkName')}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>{t('rpcUrl')}</label>
+                  <input
+                    type="url"
+                    value={editNetwork.rpcUrl}
+                    onChange={(e) => setEditNetwork({ ...editNetwork, rpcUrl: e.target.value })}
+                    placeholder="https://..."
+                  />
+                </div>
+                <div className="form-group">
+                  <label>{t('chainId')}</label>
+                  <input
+                    type="number"
+                    value={editNetwork.chainId}
+                    onChange={(e) => setEditNetwork({ ...editNetwork, chainId: e.target.value })}
+                    placeholder="1"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>{t('currencySymbol')}</label>
+                  <input
+                    type="text"
+                    value={editNetwork.currencySymbol}
+                    onChange={(e) => setEditNetwork({ ...editNetwork, currencySymbol: e.target.value })}
+                    placeholder="ETH"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>{t('blockExplorer')} ({t('optional')})</label>
+                  <input
+                    type="url"
+                    value={editNetwork.blockExplorer}
+                    onChange={(e) => setEditNetwork({ ...editNetwork, blockExplorer: e.target.value })}
+                    placeholder="https://..."
+                  />
+                </div>
+                {validationError && (
+                  <div className="error-message">{validationError}</div>
+                )}
+                <div className="form-actions">
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleUpdateNetwork}
+                    disabled={validating}
+                  >
+                    {validating ? t('validating') : t('updateNetwork')}
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={cancelEdit}
+                    disabled={validating}
+                  >
+                    {t('cancel')}
+                  </button>
+                </div>
               </div>
-              <div className="network-details">
-                <span className="chain-id">Chain ID: {network.chainId}</span>
-                <span className="currency">{network.currencySymbol}</span>
-              </div>
-            </div>
-            <div className="network-actions">
-              {currentNetwork !== key && (
-                <button
-                  className="btn btn-sm btn-primary"
-                  onClick={() => handleNetworkSwitch(key)}
-                  disabled={loading}
-                >
-                  {t('switch')}
-                </button>
-              )}
-              {currentNetwork === key && (
-                <span className="current-badge">{t('current')}</span>
-              )}
-              {network.isCustom && (
-                <button
-                  className="btn btn-sm btn-danger"
-                  onClick={() => handleRemoveNetwork(network.chainId)}
-                  disabled={loading}
-                >
-                  {t('remove')}
-                </button>
-              )}
-            </div>
+            ) : (
+              <>
+                <div className="network-info">
+                  <div className="network-name">
+                    {network.name}
+                    {network.isCustom && <span className="custom-badge">{t('custom')}</span>}
+                  </div>
+                  <div className="network-details">
+                    <span className="chain-id">Chain ID: {network.chainId}</span>
+                    <span className="currency">{network.currencySymbol}</span>
+                  </div>
+                </div>
+                <div className="network-actions">
+                  {currentNetwork !== key && (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => handleNetworkSwitch(key)}
+                      disabled={loading}
+                    >
+                      {t('switch')}
+                    </button>
+                  )}
+                  {currentNetwork === key && (
+                    <span className="current-badge">{t('current')}</span>
+                  )}
+                  {network.isCustom && (
+                    <>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => handleEditNetwork(key, network)}
+                        disabled={loading}
+                      >
+                        {t('edit')}
+                      </button>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        onClick={() => handleRemoveNetwork(network.chainId)}
+                        disabled={loading}
+                      >
+                        {t('remove')}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         ))}
       </div>

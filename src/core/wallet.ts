@@ -100,6 +100,27 @@ export async function removeCustomNetwork(chainId: number): Promise<void> {
   await chrome.storage.local.set({ customNetworks });
 }
 
+export async function updateCustomNetwork(networkKey: string, network: Omit<NetworkConfig, 'isCustom'>): Promise<void> {
+  if (!chrome?.storage?.local) {
+    throw new Error('Chrome storage API not available');
+  }
+  
+  const customNetworks = await getCustomNetworks();
+  
+  // 检查网络是否存在
+  if (!customNetworks[networkKey]) {
+    throw new Error('Network not found');
+  }
+  
+  // 更新网络配置
+  customNetworks[networkKey] = {
+    ...network,
+    isCustom: true,
+  };
+  
+  await chrome.storage.local.set({ customNetworks });
+}
+
 export async function getCustomNetworks(): Promise<Record<string, NetworkConfig>> {
   if (!chrome?.storage?.local) {
     console.warn('Chrome storage API not available, returning empty custom networks');

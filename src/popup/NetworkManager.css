@@ -18,7 +18,8 @@
   color: #333;
 }
 
-.add-network-form {
+.add-network-form,
+.edit-network-form {
   background: #f8f9fa;
   padding: 1rem;
   border-radius: 8px;
@@ -26,7 +27,8 @@
   border: 1px solid #e9ecef;
 }
 
-.add-network-form h4 {
+.add-network-form h4,
+.edit-network-form h4 {
   margin: 0 0 1rem 0;
   color: #495057;
   font-size: 1rem;
@@ -193,6 +195,17 @@
 .btn-danger:hover:not(:disabled) {
   background: #c82333;
   border-color: #bd2130;
+}
+
+.btn-secondary {
+  background: #6c757d;
+  border-color: #6c757d;
+  color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #5a6268;
+  border-color: #545b62;
 }
 
 .btn-sm {

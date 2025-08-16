@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试网络编辑功能</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+        .test-section h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        .network-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            background: #fff;
+            margin: 10px 0;
+        }
+        .network-info {
+            flex: 1;
+        }
+        .network-name {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .network-details {
+            font-size: 0.9rem;
+            color: #666;
+        }
+        .network-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .custom-badge {
+            background: #6c757d;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            margin-left: 10px;
+        }
+        .current-badge {
+            background: #28a745;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        .error-message {
+            color: #dc3545;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>网络编辑功能测试</h1>
+        
+        <div class="test-section">
+            <h3>功能说明</h3>
+            <p>这个测试页面展示了网络管理器的编辑功能：</p>
+            <ul>
+                <li>每个自定义网络都有一个"编辑"按钮</li>
+                <li>点击编辑按钮会显示编辑表单</li>
+                <li>可以修改网络名称、RPC URL、链ID、货币符号和区块浏览器</li>
+                <li>编辑完成后点击"更新网络"保存更改</li>
+                <li>可以点击"取消"放弃编辑</li>
+            </ul>
+        </div>
+
+        <div class="test-section">
+            <h3>模拟网络列表</h3>
+            <div id="networks-list">
+                <!-- 网络项目将在这里动态生成 -->
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>测试操作</h3>
+            <button class="btn" onclick="addTestNetwork()">添加测试网络</button>
+            <button class="btn" onclick="resetNetworks()">重置网络</button>
+            <button class="btn" onclick="showCurrentState()">显示当前状态</button>
+        </div>
+    </div>
+
+    <script>
+        // 模拟网络数据
+        let networks = {
+            mainnet: {
+                name: 'Ethereum Mainnet',
+                rpcUrl: 'https://eth.llamarpc.com',
+                chainId: 1,
+                currencySymbol: 'ETH',
+                blockExplorer: 'https://etherscan.io',
+                isCustom: false
+            },
+            custom_123: {
+                name: '测试网络',
+                rpcUrl: 'https://test-rpc.example.com',
+                chainId: 123,
+                currencySymbol: 'TEST',
+                blockExplorer: 'https://test-explorer.example.com',
+                isCustom: true
+            }
+        };
+
+        let currentNetwork = 'mainnet';
+        let editingNetwork = null;
+
+        // 渲染网络列表
+        function renderNetworks() {
+            const container = document.getElementById('networks-list');
+            container.innerHTML = '';
+
+            Object.entries(networks).forEach(([key, network]) => {
+                const networkItem = document.createElement('div');
+                networkItem.className = 'network-item';
+                
+                if (editingNetwork === key) {
+                    // 编辑模式
+                    networkItem.innerHTML = `
+                        <div style="width: 100%;">
+                            <h4>编辑网络</h4>
+                            <div class="form-group">
+                                <label>网络名称</label>
+                                <input type="text" id="edit-name-${key}" value="${network.name}" placeholder="输入网络名称">
+                            </div>
+                            <div class="form-group">
+                                <label>RPC URL</label>
+                                <input type="url" id="edit-rpc-${key}" value="${network.rpcUrl}" placeholder="https://...">
+                            </div>
+                            <div class="form-group">
+                                <label>链ID</label>
+                                <input type="number" id="edit-chainid-${key}" value="${network.chainId}" placeholder="1">
+                            </div>
+                            <div class="form-group">
+                                <label>货币符号</label>
+                                <input type="text" id="edit-symbol-${key}" value="${network.currencySymbol}" placeholder="ETH">
+                            </div>
+                            <div class="form-group">
+                                <label>区块浏览器 (可选)</label>
+                                <input type="url" id="edit-explorer-${key}" value="${network.blockExplorer || ''}" placeholder="https://...">
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn" onclick="updateNetwork('${key}')">更新网络</button>
+                                <button class="btn btn-secondary" onclick="cancelEdit()">取消</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // 显示模式
+                    networkItem.innerHTML = `
+                        <div class="network-info">
+                            <div class="network-name">
+                                ${network.name}
+                                ${network.isCustom ? '<span class="custom-badge">自定义</span>' : ''}
+                            </div>
+                            <div class="network-details">
+                                <span>Chain ID: ${network.chainId}</span>
+                                <span style="margin-left: 15px;">${network.currencySymbol}</span>
+                            </div>
+                        </div>
+                        <div class="network-actions">
+                            ${currentNetwork !== key ? 
+                                `<button class="btn" onclick="switchNetwork('${key}')">切换</button>` : 
+                                '<span class="current-badge">当前</span>'
+                            }
+                            ${network.isCustom ? `
+                                <button class="btn btn-secondary" onclick="editNetwork('${key}')">编辑</button>
+                                <button class="btn btn-danger" onclick="removeNetwork('${key}')">删除</button>
+                            ` : ''}
+                        </div>
+                    `;
+                }
+                
+                container.appendChild(networkItem);
+            });
+        }
+
+        // 编辑网络
+        function editNetwork(networkKey) {
+            editingNetwork = networkKey;
+            renderNetworks();
+        }
+
+        // 取消编辑
+        function cancelEdit() {
+            editingNetwork = null;
+            renderNetworks();
+        }
+
+        // 更新网络
+        function updateNetwork(networkKey) {
+            const name = document.getElementById(`edit-name-${networkKey}`).value;
+            const rpcUrl = document.getElementById(`edit-rpc-${networkKey}`).value;
+            const chainId = parseInt(document.getElementById(`edit-chainid-${networkKey}`).value);
+            const currencySymbol = document.getElementById(`edit-symbol-${networkKey}`).value;
+            const blockExplorer = document.getElementById(`edit-explorer-${networkKey}`).value;
+
+            if (!name || !rpcUrl || !chainId || !currencySymbol) {
+                alert('请填写所有必填字段');
+                return;
+            }
+
+            if (isNaN(chainId) || chainId <= 0) {
+                alert('链ID必须是有效的正整数');
+                return;
+            }
+
+            // 更新网络配置
+            networks[networkKey] = {
+                name,
+                rpcUrl,
+                chainId,
+                currencySymbol,
+                blockExplorer: blockExplorer || undefined,
+                isCustom: true
+            };
+
+            editingNetwork = null;
+            renderNetworks();
+            alert('网络更新成功！');
+        }
+
+        // 切换网络
+        function switchNetwork(networkKey) {
+            currentNetwork = networkKey;
+            renderNetworks();
+            alert(`已切换到 ${networks[networkKey].name}`);
+        }
+
+        // 删除网络
+        function removeNetwork(networkKey) {
+            if (confirm(`确定要删除网络 "${networks[networkKey].name}" 吗？`)) {
+                delete networks[networkKey];
+                if (currentNetwork === networkKey) {
+                    currentNetwork = 'mainnet';
+                }
+                renderNetworks();
+                alert('网络删除成功！');
+            }
+        }
+
+        // 添加测试网络
+        function addTestNetwork() {
+            const chainId = Math.floor(Math.random() * 1000) + 1000;
+            const networkKey = `custom_${chainId}`;
+            
+            networks[networkKey] = {
+                name: `测试网络 ${chainId}`,
+                rpcUrl: `https://test-rpc-${chainId}.example.com`,
+                chainId: chainId,
+                currencySymbol: 'TEST',
+                blockExplorer: `https://test-explorer-${chainId}.example.com`,
+                isCustom: true
+            };
+
+            renderNetworks();
+            alert(`已添加测试网络 ${chainId}`);
+        }
+
+        // 重置网络
+        function resetNetworks() {
+            networks = {
+                mainnet: {
+                    name: 'Ethereum Mainnet',
+                    rpcUrl: 'https://eth.llamarpc.com',
+                    chainId: 1,
+                    currencySymbol: 'ETH',
+                    blockExplorer: 'https://etherscan.io',
+                    isCustom: false
+                }
+            };
+            currentNetwork = 'mainnet';
+            editingNetwork = null;
+            renderNetworks();
+            alert('网络已重置');
+        }
+
+        // 显示当前状态
+        function showCurrentState() {
+            console.log('当前网络:', currentNetwork);
+            console.log('所有网络:', networks);
+            console.log('编辑状态:', editingNetwork);
+            alert('状态已输出到控制台');
+        }
+
+        // 初始化
+        renderNetworks();
+    </script>
+</body>
+</html>
