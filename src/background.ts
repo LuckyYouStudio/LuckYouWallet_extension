@@ -32,6 +32,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handlePopupResponse(message);
     return true;
   }
+
+  if (message.type === 'CLOSE_POPUP_REQUEST') {
+    // 处理 popup 关闭请求
+    console.log('[LuckYou Wallet] Received CLOSE_POPUP_REQUEST, attempting to close popup');
+    try {
+      // 尝试关闭 popup
+      chrome.action.closePopup();
+    } catch (error) {
+      console.log('[LuckYou Wallet] Failed to close popup:', error);
+    }
+    return true;
+  }
 });
 
 // 处理来自provider的请求
@@ -250,34 +262,86 @@ function sendErrorToProvider(requestId: string, error: any) {
 
 // 打开popup进行授权
 async function openPopupForAuthorization(requestId: string, tabId?: number) {
-  // 存储授权请求
-  await chrome.storage.local.set({
-    pendingAuth: {
-      requestId,
-      tabId,
-      type: 'authorization',
-      timestamp: Date.now()
+  try {
+    // 存储授权请求
+    await chrome.storage.local.set({
+      pendingAuth: {
+        requestId,
+        tabId,
+        type: 'authorization',
+        timestamp: Date.now()
+      }
+    });
+    
+    console.log('[LuckYou Wallet] Opening popup for authorization, requestId:', requestId);
+    
+    // 尝试打开popup
+    try {
+      await chrome.action.openPopup();
+      console.log('[LuckYou Wallet] Popup opened successfully');
+    } catch (popupError) {
+      console.warn('[LuckYou Wallet] Failed to open popup automatically:', popupError);
+      
+      // 如果自动打开失败，尝试通过通知提醒用户
+      try {
+        await chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon128.png',
+          title: 'LuckYou Wallet',
+          message: '网站请求连接钱包，请点击扩展图标进行授权'
+        });
+        console.log('[LuckYou Wallet] Notification created to remind user');
+      } catch (notificationError) {
+        console.error('[LuckYou Wallet] Failed to create notification:', notificationError);
+      }
     }
-  });
-  
-  // 打开popup
-  chrome.action.openPopup();
+  } catch (error) {
+    console.error('[LuckYou Wallet] Error in openPopupForAuthorization:', error);
+  }
 }
 
 // 打开popup进行签名
 async function openPopupForSignature(requestId: string, request: any) {
-  // 存储签名请求
-  await chrome.storage.local.set({
-    pendingSignature: {
-      requestId,
-      request,
-      type: 'signature',
-      timestamp: Date.now()
+  try {
+    // 存储签名请求
+    await chrome.storage.local.set({
+      pendingSignature: {
+        requestId,
+        request,
+        type: 'signature',
+        timestamp: Date.now()
+      }
+    });
+    
+    console.log('[LuckYou Wallet] Opening popup for signature, requestId:', requestId, 'method:', request.method);
+    
+    // 尝试打开popup
+    try {
+      await chrome.action.openPopup();
+      console.log('[LuckYou Wallet] Popup opened successfully for signature');
+    } catch (popupError) {
+      console.warn('[LuckYou Wallet] Failed to open popup automatically for signature:', popupError);
+      
+      // 如果自动打开失败，尝试通过通知提醒用户
+      try {
+        const methodName = request.method === 'eth_sendTransaction' ? '交易' : 
+                          request.method === 'personal_sign' ? '消息签名' : 
+                          request.method === 'eth_signTypedData_v4' ? '类型化数据签名' : '操作';
+        
+        await chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon128.png',
+          title: 'LuckYou Wallet',
+          message: `网站请求${methodName}，请点击扩展图标进行确认`
+        });
+        console.log('[LuckYou Wallet] Notification created to remind user for signature');
+      } catch (notificationError) {
+        console.error('[LuckYou Wallet] Failed to create notification for signature:', notificationError);
+      }
     }
-  });
-  
-  // 打开popup
-  chrome.action.openPopup();
+  } catch (error) {
+    console.error('[LuckYou Wallet] Error in openPopupForSignature:', error);
+  }
 }
 
 // 获取钱包数据

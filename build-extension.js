@@ -60,7 +60,8 @@ async function buildExtension() {
     permissions: [
       'storage',
       'activeTab',
-      'scripting'
+      'scripting',
+      'notifications'
     ],
     host_permissions: [
       "<all_urls>"

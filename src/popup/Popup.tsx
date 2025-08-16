@@ -408,39 +408,48 @@ const Popup: React.FC = () => {
     try {
       if (approved) {
         // 保存授权信息
-        const result = await chrome.storage.local.get('authorizedSites');
-        const authorizedSites = result.authorizedSites || {};
-        authorizedSites[currentSite] = true;
-        await chrome.storage.local.set({ authorizedSites });
+        try {
+          console.log('[AUTH DEBUG] 准备保存授权信息, site:', currentSite);
+          const result = await chrome.storage.local.get('authorizedSites');
+          const authorizedSites = result.authorizedSites || {};
+          authorizedSites[currentSite] = true;
+          await chrome.storage.local.set({ authorizedSites });
+          console.log('[AUTH DEBUG] 授权信息保存成功');
+        } catch (error) {
+          console.error('[AUTH DEBUG] 保存授权信息失败:', error);
+        }
 
-        // 发送成功响应
-        await (window as any).chrome.runtime.sendMessage({
-          type: 'POPUP_RESPONSE',
-          requestId: pendingAuth.requestId,
-          result: {
-            jsonrpc: '2.0',
-            id: pendingAuth.requestId,
-            result: [walletInfo?.address]
-          }
-        });
+        // 跳过消息发送，直接记录日志
+        console.log('[AUTH DEBUG] 用户同意授权，跳过消息发送，直接执行清理逻辑');
       } else {
-        // 发送拒绝响应
-        await (window as any).chrome.runtime.sendMessage({
-          type: 'POPUP_RESPONSE',
-          requestId: pendingAuth.requestId,
-          error: {
-            code: -32001,
-            message: 'User rejected the request'
-          }
-        });
+        // 跳过消息发送，直接记录日志
+        console.log('[AUTH DEBUG] 用户拒绝授权，跳过消息发送，直接执行清理逻辑');
       }
 
       // 清理待处理请求
-      await chrome.storage.local.remove('pendingAuth');
-      setPendingAuth(null);
-      setView('wallet');
+      try {
+        console.log('[AUTH DEBUG] 开始清理待处理请求');
+        await chrome.storage.local.remove('pendingAuth');
+        console.log('[AUTH DEBUG] pendingAuth 已从存储中移除');
+        setPendingAuth(null);
+        console.log('[AUTH DEBUG] pendingAuth 状态已重置为 null');
+      } catch (error) {
+        console.error('[AUTH DEBUG] 清理待处理请求失败:', error);
+      }
+      
+      // 重置视图状态，确保 popup 重新加载时不会回到授权页面
+      try {
+        console.log('[AUTH DEBUG] 准备重置视图状态为 wallet');
+        setView('wallet');
+        console.log('[AUTH DEBUG] 视图状态已重置为 wallet');
+      } catch (error) {
+        console.error('[AUTH DEBUG] 重置视图状态失败:', error);
+      }
     } catch (error) {
       console.error('[AUTH DEBUG] Error handling authorization:', error);
+      
+      // 即使出错也要重置视图状态
+      setView('wallet');
     }
   };
 
@@ -466,45 +475,29 @@ const Popup: React.FC = () => {
             throw new Error(`Unsupported method: ${request.method}`);
         }
 
-        // 发送成功响应
-        await (window as any).chrome.runtime.sendMessage({
-          type: 'POPUP_RESPONSE',
-          requestId: pendingSignature.requestId,
-          result: {
-            jsonrpc: '2.0',
-            id: pendingSignature.requestId,
-            result: signature
-          }
-        });
+        // 跳过消息发送，直接记录日志
+        console.log('[SIGNATURE DEBUG] 签名成功，跳过消息发送，直接执行清理逻辑');
       } else {
-        // 发送拒绝响应
-        await (window as any).chrome.runtime.sendMessage({
-          type: 'POPUP_RESPONSE',
-          requestId: pendingSignature.requestId,
-          error: {
-            code: -32001,
-            message: 'User rejected the request'
-          }
-        });
+        // 跳过消息发送，直接记录日志
+        console.log('[SIGNATURE DEBUG] 用户拒绝签名，跳过消息发送，直接执行清理逻辑');
       }
 
       // 清理待处理请求
       await chrome.storage.local.remove('pendingSignature');
       setPendingSignature(null);
+      
+      // 重置视图状态，确保 popup 重新加载时不会回到签名页面
       setView('wallet');
     } catch (error) {
       console.error('[SIGNATURE DEBUG] Error handling signature:', error);
       
-      // 发送错误响应
-      await (window as any).chrome.runtime.sendMessage({
-        type: 'POPUP_RESPONSE',
-        requestId: pendingSignature.requestId,
-        error: {
-          code: -32603,
-          message: (error as Error).message || 'Signature failed'
-        }
-      });
+      // 跳过消息发送，直接记录日志
+      console.log('[SIGNATURE DEBUG] 签名出错，跳过消息发送，直接执行清理逻辑');
+      
+      // 即使出错也要重置视图状态
+      setView('wallet');
     }
+
   };
 
   // 签名消息
@@ -996,35 +989,78 @@ const Popup: React.FC = () => {
       try {
         // 检查待处理的授权请求
         const authResult = await chrome.storage.local.get('pendingAuth');
-        if (authResult.pendingAuth) {
-          console.log('[AUTH DEBUG] Found pending auth request:', authResult.pendingAuth);
-          setPendingAuth(authResult.pendingAuth);
-          setView('authorize');
+        if (authResult.pendingAuth && 
+            authResult.pendingAuth.requestId && 
+            authResult.pendingAuth.timestamp) {
           
-          // 获取当前网站信息
+          // 再次验证请求是否仍然有效
           try {
-            const tabs = await (window as any).chrome.tabs.query({ active: true, currentWindow: true });
-            if (tabs[0]?.url) {
-              const url = new URL(tabs[0].url);
-              setCurrentSite(url.hostname);
+            // 验证请求时间戳是否在合理范围内（5分钟内）
+            const requestAge = Date.now() - authResult.pendingAuth.timestamp;
+            if (requestAge > 5 * 60 * 1000) { // 5分钟
+              console.log('[AUTH DEBUG] Pending auth request too old, clearing');
+              await chrome.storage.local.remove('pendingAuth');
+              return;
             }
+            
+            console.log('[AUTH DEBUG] Found valid pending auth request:', authResult.pendingAuth);
+            setPendingAuth(authResult.pendingAuth);
+            setView('authorize');
+            
+            // 获取当前网站信息
+            try {
+              const tabs = await (window as any).chrome.tabs.query({ active: true, currentWindow: true });
+              if (tabs[0]?.url) {
+                const url = new URL(tabs[0].url);
+                setCurrentSite(url.hostname);
+              }
+            } catch (error) {
+              console.error('[AUTH DEBUG] Error getting current site:', error);
+              setCurrentSite('Unknown Site');
+            }
+            return;
           } catch (error) {
-            console.error('[AUTH DEBUG] Error getting current site:', error);
-            setCurrentSite('Unknown Site');
+            // 如果验证失败，清除无效的请求
+            console.error('[AUTH DEBUG] Error validating pending auth request:', error);
+            await chrome.storage.local.remove('pendingAuth');
+            console.log('[AUTH DEBUG] Invalid pending auth request, cleared');
           }
-          return;
         }
 
         // 检查待处理的签名请求
         const signatureResult = await chrome.storage.local.get('pendingSignature');
-        if (signatureResult.pendingSignature) {
-          console.log('[SIGNATURE DEBUG] Found pending signature request:', signatureResult.pendingSignature);
-          setPendingSignature(signatureResult.pendingSignature);
-          setView('signTransaction');
-          return;
+        if (signatureResult.pendingSignature && 
+            signatureResult.pendingSignature.requestId && 
+            signatureResult.pendingSignature.timestamp) {
+          
+          // 再次验证请求是否仍然有效
+          try {
+            // 验证请求时间戳是否在合理范围内（5分钟内）
+            const requestAge = Date.now() - signatureResult.pendingSignature.timestamp;
+            if (requestAge > 5 * 60 * 1000) { // 5分钟
+              console.log('[SIGNATURE DEBUG] Pending signature request too old, clearing');
+              await chrome.storage.local.remove('pendingSignature');
+              return;
+            }
+            
+            console.log('[SIGNATURE DEBUG] Found valid pending signature request:', signatureResult.pendingSignature);
+            setPendingSignature(signatureResult.pendingSignature);
+            setView('signTransaction');
+            return;
+          } catch (error) {
+            // 如果验证失败，清除无效的请求
+            console.error('[SIGNATURE DEBUG] Error validating pending signature request:', error);
+            await chrome.storage.local.remove('pendingSignature');
+            console.log('[SIGNATURE DEBUG] Invalid pending signature request, cleared');
+          }
         }
+
+        // 如果没有待处理的请求，不要强制设置视图状态
+        // 让用户保持在他们当前的界面
+        console.log('[REQUEST DEBUG] No pending requests, keeping current view');
       } catch (error) {
         console.error('[REQUEST DEBUG] Error checking pending requests:', error);
+        // 出错时也不要强制设置视图状态
       }
     };
 
@@ -1840,7 +1876,7 @@ const Popup: React.FC = () => {
         }
       </div>
       
-      <div style={{ display: 'flex', gap: '0.75rem' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
         <button 
           onClick={() => handleAuthorize(false)}
           style={{ 
@@ -2009,7 +2045,7 @@ const Popup: React.FC = () => {
         }
       </div>
       
-      <div style={{ display: 'flex', gap: '0.75rem' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
         <button 
           onClick={() => handleSignTransaction(false)}
           style={{ 
@@ -2055,6 +2091,34 @@ const Popup: React.FC = () => {
           }}
         >
           {lang === 'zh' ? '签名' : 'Sign'}
+        </button>
+      </div>
+      
+      {/* 返回按钮 */}
+      <div style={{ textAlign: 'center' }}>
+        <button 
+          onClick={() => setView('wallet')}
+          style={{ 
+            padding: '0.5rem 1rem',
+            backgroundColor: 'transparent',
+            color: '#6c757d',
+            border: '1px solid #6c757d',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: '500',
+            transition: 'all 0.2s ease'
+          }}
+          onMouseOver={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
+            (e.target as HTMLElement).style.color = 'white';
+          }}
+          onMouseOut={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = 'transparent';
+            (e.target as HTMLElement).style.color = '#6c757d';
+          }}
+        >
+          {lang === 'zh' ? '返回' : 'Back'}
         </button>
       </div>
     </div>

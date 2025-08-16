@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuckYou Wallet 自动弹出测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        .test-section {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 20px 0;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .test-section h3 {
+            margin-top: 0;
+            color: #ffd700;
+            font-size: 1.3rem;
+        }
+        .btn {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        }
+        .btn:active {
+            transform: translateY(0);
+        }
+        .btn.secondary {
+            background: linear-gradient(45deg, #4ecdc4, #44a08d);
+        }
+        .btn.warning {
+            background: linear-gradient(45deg, #f39c12, #e67e22);
+        }
+        .status {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .info {
+            background: rgba(52, 152, 219, 0.2);
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+        }
+        .success {
+            background: rgba(46, 204, 113, 0.2);
+            border-left: 4px solid #2ecc71;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+        }
+        .error {
+            background: rgba(231, 76, 60, 0.2);
+            border-left: 4px solid #e74c3c;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+        }
+        .wallet-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .wallet-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .wallet-card h4 {
+            margin-top: 0;
+            color: #ffd700;
+        }
+        .wallet-address {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            word-break: break-all;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 LuckYou Wallet 自动弹出测试</h1>
+        
+        <div class="info">
+            <strong>📋 测试说明：</strong>
+            这个页面用于测试 LuckYou Wallet 扩展的自动弹出功能。当你点击下面的按钮时，扩展应该自动弹出 popup 窗口，就像 MetaMask 一样。
+        </div>
+
+        <div class="test-section">
+            <h3>🔗 连接测试</h3>
+            <p>测试钱包连接请求，应该自动弹出授权页面</p>
+            <button class="btn" onclick="testConnection()">连接钱包</button>
+            <button class="btn secondary" onclick="getAccounts()">获取账户</button>
+        </div>
+
+        <div class="test-section">
+            <h3>✍️ 签名测试</h3>
+            <p>测试消息签名，应该自动弹出签名确认页面</p>
+            <button class="btn warning" onclick="signMessage()">签名消息</button>
+            <button class="btn warning" onclick="signTypedData()">签名类型化数据</button>
+        </div>
+
+        <div class="test-section">
+            <h3>💰 交易测试</h3>
+            <p>测试交易请求，应该自动弹出交易确认页面</p>
+            <button class="btn" onclick="sendTransaction()">发送交易</button>
+        </div>
+
+        <div class="test-section">
+            <h3>🔍 钱包状态</h3>
+            <div class="wallet-info">
+                <div class="wallet-card">
+                    <h4>MetaMask</h4>
+                    <div id="metamask-status">检测中...</div>
+                    <div id="metamask-address" class="wallet-address" style="display: none;"></div>
+                </div>
+                <div class="wallet-card">
+                    <h4>LuckYou Wallet</h4>
+                    <div id="luckyou-status">检测中...</div>
+                    <div id="luckyou-address" class="wallet-address" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>📊 测试日志</h3>
+            <div id="log" class="status"></div>
+            <button class="btn secondary" onclick="clearLog()">清除日志</button>
+        </div>
+    </div>
+
+    <script>
+        let requestId = 0;
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = type;
+            logEntry.innerHTML = `[${timestamp}] ${message}`;
+            logDiv.appendChild(logEntry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        // 检测钱包
+        function detectWallets() {
+            log('🔍 开始检测钱包...');
+            
+            // 检测 MetaMask
+            if (window.ethereum && window.ethereum.isMetaMask) {
+                document.getElementById('metamask-status').innerHTML = '✅ 已连接';
+                if (window.ethereum.selectedAddress) {
+                    document.getElementById('metamask-address').textContent = window.ethereum.selectedAddress;
+                    document.getElementById('metamask-address').style.display = 'block';
+                }
+                log('✅ 检测到 MetaMask');
+            } else {
+                document.getElementById('metamask-status').innerHTML = '❌ 未检测到';
+                log('❌ 未检测到 MetaMask');
+            }
+
+            // 检测 LuckYou Wallet
+            if (window.luckyouWallet && window.luckyouWallet.isLuckYouWallet) {
+                document.getElementById('luckyou-status').innerHTML = '✅ 已连接';
+                if (window.luckyouWallet.selectedAddress) {
+                    document.getElementById('luckyou-address').textContent = window.luckyouWallet.selectedAddress;
+                    document.getElementById('luckyou-address').style.display = 'block';
+                }
+                log('✅ 检测到 LuckYou Wallet');
+            } else {
+                document.getElementById('luckyou-status').innerHTML = '❌ 未检测到';
+                log('❌ 未检测到 LuckYou Wallet');
+            }
+        }
+
+        // 测试连接
+        async function testConnection() {
+            log('🔗 开始测试钱包连接...');
+            
+            try {
+                if (window.luckyouWallet) {
+                    log('使用 LuckYou Wallet 进行连接测试');
+                    const accounts = await window.luckyouWallet.requestAccounts();
+                    log(`✅ 连接成功！获取到 ${accounts.length} 个账户`);
+                    log(`第一个账户: ${accounts[0]}`);
+                    detectWallets();
+                } else if (window.ethereum) {
+                    log('使用 MetaMask 进行连接测试');
+                    const accounts = await window.ethereum.requestAccounts();
+                    log(`✅ 连接成功！获取到 ${accounts.length} 个账户`);
+                    log(`第一个账户: ${accounts[0]}`);
+                    detectWallets();
+                } else {
+                    log('❌ 未检测到任何钱包');
+                }
+            } catch (error) {
+                log(`❌ 连接失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 获取账户
+        async function getAccounts() {
+            log('📋 获取账户列表...');
+            
+            try {
+                if (window.luckyouWallet) {
+                    const accounts = await window.luckyouWallet.getAccounts();
+                    log(`✅ 获取到 ${accounts.length} 个账户`);
+                    accounts.forEach((account, index) => {
+                        log(`账户 ${index + 1}: ${account}`);
+                    });
+                } else if (window.ethereum) {
+                    const accounts = await window.ethereum.getAccounts();
+                    log(`✅ 获取到 ${accounts.length} 个账户`);
+                    accounts.forEach((account, index) => {
+                        log(`账户 ${index + 1}: ${account}`);
+                    });
+                } else {
+                    log('❌ 未检测到任何钱包');
+                }
+            } catch (error) {
+                log(`❌ 获取账户失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 签名消息
+        async function signMessage() {
+            log('✍️ 开始签名消息...');
+            
+            try {
+                if (window.luckyouWallet) {
+                    const accounts = await window.luckyouWallet.getAccounts();
+                    if (accounts.length === 0) {
+                        log('❌ 请先连接钱包');
+                        return;
+                    }
+                    
+                    const message = `Hello LuckYou Wallet! ${Date.now()}`;
+                    const signature = await window.luckyouWallet.signMessage(message, accounts[0]);
+                    log(`✅ 消息签名成功！`);
+                    log(`消息: ${message}`);
+                    log(`签名: ${signature}`);
+                } else if (window.ethereum) {
+                    const accounts = await window.ethereum.getAccounts();
+                    if (accounts.length === 0) {
+                        log('❌ 请先连接钱包');
+                        return;
+                    }
+                    
+                    const message = `Hello MetaMask! ${Date.now()}`;
+                    const signature = await window.ethereum.signMessage(message, accounts[0]);
+                    log(`✅ 消息签名成功！`);
+                    log(`消息: ${message}`);
+                    log(`签名: ${signature}`);
+                } else {
+                    log('❌ 未检测到任何钱包');
+                }
+            } catch (error) {
+                log(`❌ 签名失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 签名类型化数据
+        async function signTypedData() {
+            log('📝 开始签名类型化数据...');
+            
+            try {
+                if (window.luckyouWallet) {
+                    const accounts = await window.luckyouWallet.getAccounts();
+                    if (accounts.length === 0) {
+                        log('❌ 请先连接钱包');
+                        return;
+                    }
+                    
+                    const typedData = {
+                        types: {
+                            EIP712Domain: [
+                                { name: 'name', type: 'string' },
+                                { name: 'version', type: 'string' },
+                                { name: 'chainId', type: 'uint256' },
+                                { name: 'verifyingContract', type: 'address' }
+                            ],
+                            Person: [
+                                { name: 'name', type: 'string' },
+                                { name: 'wallet', type: 'address' }
+                            ]
+                        },
+                        primaryType: 'Person',
+                        domain: {
+                            name: 'Ether Mail',
+                            version: '1',
+                            chainId: 1,
+                            verifyingContract: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC'
+                        },
+                        message: {
+                            name: 'Bob',
+                            wallet: accounts[0]
+                        }
+                    };
+                    
+                    const signature = await window.luckyouWallet.signTypedData(typedData, accounts[0]);
+                    log(`✅ 类型化数据签名成功！`);
+                    log(`签名: ${signature}`);
+                } else if (window.ethereum) {
+                    const accounts = await window.ethereum.getAccounts();
+                    if (accounts.length === 0) {
+                        log('❌ 请先连接钱包');
+                        return;
+                    }
+                    
+                    const typedData = {
+                        types: {
+                            EIP712Domain: [
+                                { name: 'name', type: 'string' },
+                                { name: 'version', type: 'string' },
+                                { name: 'chainId', type: 'uint256' },
+                                { name: 'verifyingContract', type: 'address' }
+                            ],
+                            Person: [
+                                { name: 'name', type: 'string' },
+                                { name: 'wallet', type: 'address' }
+                            ]
+                        },
+                        primaryType: 'Person',
+                        domain: {
+                            name: 'Ether Mail',
+                            version: '1',
+                            chainId: 1,
+                            verifyingContract: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC'
+                        },
+                        message: {
+                            name: 'Bob',
+                            wallet: accounts[0]
+                        }
+                    };
+                    
+                    const signature = await window.ethereum.signTypedData(typedData, accounts[0]);
+                    log(`✅ 类型化数据签名成功！`);
+                    log(`签名: ${signature}`);
+                } else {
+                    log('❌ 未检测到任何钱包');
+                }
+            } catch (error) {
+                log(`❌ 类型化数据签名失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 发送交易
+        async function sendTransaction() {
+            log('💰 开始发送交易...');
+            
+            try {
+                if (window.luckyouWallet) {
+                    const accounts = await window.luckyouWallet.getAccounts();
+                    if (accounts.length === 0) {
+                        log('❌ 请先连接钱包');
+                        return;
+                    }
+                    
+                    const transaction = {
+                        to: '0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6',
+                        value: '0x0',
+                        data: '0x'
+                    };
+                    
+                    const txHash = await window.luckyouWallet.sendTransaction(transaction);
+                    log(`✅ 交易发送成功！`);
+                    log(`交易哈希: ${txHash}`);
+                } else if (window.ethereum) {
+                    const accounts = await window.ethereum.getAccounts();
+                    if (accounts.length === 0) {
+                        log('❌ 请先连接钱包');
+                        return;
+                    }
+                    
+                    const transaction = {
+                        to: '0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6',
+                        value: '0x0',
+                        data: '0x'
+                    };
+                    
+                    const txHash = await window.ethereum.sendTransaction(transaction);
+                    log(`✅ 交易发送成功！`);
+                    log(`交易哈希: ${txHash}`);
+                } else {
+                    log('❌ 未检测到任何钱包');
+                }
+            } catch (error) {
+                log(`❌ 交易发送失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载完成后检测钱包
+        window.addEventListener('load', () => {
+            log('🚀 页面加载完成，开始检测钱包...');
+            detectWallets();
+            
+            // 监听钱包事件
+            if (window.ethereum) {
+                window.ethereum.on('accountsChanged', (accounts) => {
+                    log(`🔄 MetaMask 账户变更: ${accounts.length} 个账户`);
+                    detectWallets();
+                });
+            }
+            
+            if (window.luckyouWallet) {
+                window.luckyouWallet.on('accountsChanged', (accounts) => {
+                    log(`🔄 LuckYou Wallet 账户变更: ${accounts.length} 个账户`);
+                    detectWallets();
+                });
+            }
+        });
+
+        // 监听来自扩展的消息
+        window.addEventListener('message', (event) => {
+            if (event.source !== window) return;
+            
+            if (event.data.type === 'LUCKYOU_WALLET_RESPONSE') {
+                log(`📨 收到 LuckYou Wallet 响应: ${JSON.stringify(event.data)}`);
+            }
+        });
+    </script>
+</body>
+</html>
+
