@@ -18,6 +18,7 @@
     // 基本属性
     isMetaMask: false,
     isLuckYouWallet: true,
+    isEIP6963: true, // EIP-6963 支持标识
     networkVersion: null,
     chainId: null,
     selectedAddress: null,
@@ -102,6 +103,24 @@
       });
     },
 
+    // EIP-6963: 切换以太坊网络
+    async wallet_switchEthereumChain(params: any) {
+      const { chainId } = params[0];
+      return this.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId }]
+      });
+    },
+
+    // EIP-6963: 添加以太坊网络
+    async wallet_addEthereumChain(params: any) {
+      const chainInfo = params[0];
+      return this.request({
+        method: 'wallet_addEthereumChain',
+        params: [chainInfo]
+      });
+    },
+
     // 通用请求方法
     async request(requestArguments: any) {
       const id = generateId();
@@ -157,6 +176,7 @@
       if (error) {
         reject(new Error(error.message || 'Request failed'));
       } else {
+        // 确保返回标准的JSON-RPC结果
         resolve(result);
       }
     }
@@ -189,6 +209,21 @@
         ethereum._emit('connect', { chainId: ethereum.chainId });
       }
     }).catch(console.error);
+  });
+
+  // EIP-6963: 监听 provider 发现请求
+  window.addEventListener('eip6963:requestProvider', (event: any) => {
+    console.log('[LuckYou Wallet] EIP-6963 provider discovery request received');
+    
+    // 回复 provider 信息
+    if (event.detail && typeof event.detail.reply === 'function') {
+      event.detail.reply({
+        name: 'LuckYou Wallet',
+        uuid: 'luckyou-wallet-extension',
+        icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iIzAwN0JGRiIvPgo8cGF0aCBkPSJNMTYgOEwxOCAxMkwxNiAxNkwxNCAxMkwxNiA4WiIgZmlsbD0id2hpdGUiLz4KPHBhdGggZD0iTTE2IDI0TDE4IDIwTDE2IDE2TDE0IDIwTDE2IDI0WiIgZmlsbD0id2hpdGUiLz4KPC9zdmc+',
+        rdns: 'com.luckyou.wallet'
+      });
+    }
   });
 
   // 检查是否已存在ethereum对象

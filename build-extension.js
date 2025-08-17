@@ -13,14 +13,10 @@ async function buildExtension() {
   
   // 复制图标
   if (fs.existsSync('icons')) {
-    if (!fs.existsSync('dist/icons')) {
-      fs.mkdirSync('dist/icons', { recursive: true });
-    }
-    
     const iconFiles = fs.readdirSync('icons');
     iconFiles.forEach(file => {
       if (file.endsWith('.png')) {
-        fs.copyFileSync(`icons/${file}`, `dist/icons/${file}`);
+        fs.copyFileSync(`icons/${file}`, `dist/${file}`);
         console.log(`Copied icon: ${file}`);
       }
     });
@@ -47,11 +43,11 @@ async function buildExtension() {
     version: '0.1.0',
     description: 'A secure and user-friendly Web3 wallet extension',
     icons: {
-      16: 'icons/icon16.png',
-      32: 'icons/icon32.png',
-      48: 'icons/icon48.png',
-      64: 'icons/icon64.png',
-      128: 'icons/icon128.png' 
+      16: 'icon16.png',
+      32: 'icon32.png',
+      48: 'icon48.png',
+      64: 'icon64.png',
+      128: 'icon128.png' 
     },
     action: {
       default_popup: 'popup.html',

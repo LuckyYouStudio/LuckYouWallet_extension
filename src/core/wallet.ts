@@ -32,6 +32,20 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
     currencySymbol: 'ETH',
     blockExplorer: 'https://etherscan.io',
   },
+  hardhat: {
+    name: 'Hardhat Local Network',
+    rpcUrl: 'http://127.0.0.1:8545',
+    chainId: 31337,
+    currencySymbol: 'ETH',
+    blockExplorer: '',
+  },
+  localhost: {
+    name: 'Localhost',
+    rpcUrl: 'http://localhost:8545',
+    chainId: 1337,
+    currencySymbol: 'ETH',
+    blockExplorer: '',
+  },
   sepolia: {
     name: 'Sepolia Testnet',
     rpcUrl: 'https://ethereum-sepolia.publicnode.com',
@@ -167,18 +181,18 @@ export async function validateNetwork(rpcUrl: string, chainId: number): Promise<
 export async function getCurrentNetwork(): Promise<NetworkKey> {
   if (!chrome?.storage?.local) {
     console.warn('Chrome storage API not available, returning default network');
-    return 'mainnet';
+    return 'hardhat'; // 开发环境默认使用Hardhat
   }
   
   try {
     const result = await chrome.storage.local.get('selectedNetwork');
     console.log('Retrieved network from storage:', result);
-    const network = result.selectedNetwork || 'mainnet';
+    const network = result.selectedNetwork || 'hardhat'; // 默认使用Hardhat本地网络
     console.log('Using network:', network);
     return network;
   } catch (error) {
     console.error('Failed to get current network:', error);
-    return 'mainnet';
+    return 'hardhat'; // 开发环境默认使用Hardhat
   }
 }
 

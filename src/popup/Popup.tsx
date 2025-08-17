@@ -406,6 +406,8 @@ const Popup: React.FC = () => {
   // 处理授权请求
   const handleAuthorize = async (approved: boolean) => {
     try {
+      const { requestId } = pendingAuth;
+      
       if (approved) {
         // 保存授权信息
         try {
@@ -419,11 +421,25 @@ const Popup: React.FC = () => {
           console.error('[AUTH DEBUG] 保存授权信息失败:', error);
         }
 
-        // 跳过消息发送，直接记录日志
-        console.log('[AUTH DEBUG] 用户同意授权，跳过消息发送，直接执行清理逻辑');
+        // 发送授权成功结果给background script
+        console.log('[AUTH DEBUG] 用户同意授权，发送成功结果给background script');
+        await chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: requestId,
+          result: [walletInfo?.address]
+        });
+        
       } else {
-        // 跳过消息发送，直接记录日志
-        console.log('[AUTH DEBUG] 用户拒绝授权，跳过消息发送，直接执行清理逻辑');
+        // 发送拒绝结果给background script
+        console.log('[AUTH DEBUG] 用户拒绝授权，发送拒绝结果');
+        await chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: requestId,
+          error: {
+            code: 4001,
+            message: 'User rejected the request'
+          }
+        });
       }
 
       // 清理待处理请求
@@ -437,19 +453,44 @@ const Popup: React.FC = () => {
         console.error('[AUTH DEBUG] 清理待处理请求失败:', error);
       }
       
-      // 重置视图状态，确保 popup 重新加载时不会回到授权页面
+      // 重置视图状态，根据钱包状态决定跳转页面
       try {
-        console.log('[AUTH DEBUG] 准备重置视图状态为 wallet');
-        setView('wallet');
-        console.log('[AUTH DEBUG] 视图状态已重置为 wallet');
+        if (walletInfo) {
+          console.log('[AUTH DEBUG] 有钱包信息，返回钱包主界面');
+          setView('wallet');
+        } else {
+          console.log('[AUTH DEBUG] 无钱包信息，返回主界面');
+          setView('home');
+        }
       } catch (error) {
         console.error('[AUTH DEBUG] 重置视图状态失败:', error);
+        setView('home'); // 出错时默认返回主界面
       }
     } catch (error) {
       console.error('[AUTH DEBUG] Error handling authorization:', error);
       
-      // 即使出错也要重置视图状态
-      setView('wallet');
+      const { requestId } = pendingAuth;
+      
+      // 发送错误结果给background script
+      await chrome.runtime.sendMessage({
+        type: 'POPUP_RESPONSE',
+        requestId: requestId,
+        error: {
+          code: -32603,
+          message: error.message || 'Internal error'
+        }
+      });
+      
+      // 清理并重置视图状态
+      await chrome.storage.local.remove('pendingAuth');
+      setPendingAuth(null);
+      
+      // 根据钱包状态决定跳转页面
+      if (walletInfo) {
+        setView('wallet');
+      } else {
+        setView('home');
+      }
     }
   };
 
@@ -457,47 +498,94 @@ const Popup: React.FC = () => {
   const handleSignTransaction = async (approved: boolean) => {
     try {
       if (approved && walletInfo) {
-        const { request } = pendingSignature;
+        console.log('[SIGNATURE DEBUG] Processing approved signature request');
+        const { requestId, request } = pendingSignature;
+        
+        // 再次验证钱包信息
+        if (!walletInfo.privateKey) {
+          console.error('[SIGNATURE DEBUG] Wallet private key not available for signing');
+          throw new Error('Wallet private key not available');
+        }
         
         let signature: string;
         
         switch (request.method) {
           case 'personal_sign':
+            console.log('[SIGNATURE DEBUG] Processing personal_sign');
             signature = await signMessage(request.params[0], request.params[1]);
             break;
           case 'eth_signTypedData_v4':
+            console.log('[SIGNATURE DEBUG] Processing eth_signTypedData_v4');
             signature = await signTypedData(request.params[1], request.params[0]);
             break;
           case 'eth_sendTransaction':
+            console.log('[SIGNATURE DEBUG] Processing eth_sendTransaction');
             signature = await sendTransaction(request.params[0]);
             break;
           default:
             throw new Error(`Unsupported method: ${request.method}`);
         }
 
-        // 跳过消息发送，直接记录日志
-        console.log('[SIGNATURE DEBUG] 签名成功，跳过消息发送，直接执行清理逻辑');
+        // 发送成功结果给background script
+        console.log('[SIGNATURE DEBUG] 签名成功，发送结果给background script');
+        await chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: requestId,
+          result: signature
+        });
+        
       } else {
-        // 跳过消息发送，直接记录日志
-        console.log('[SIGNATURE DEBUG] 用户拒绝签名，跳过消息发送，直接执行清理逻辑');
+        const { requestId } = pendingSignature;
+        
+        // 发送拒绝结果给background script
+        console.log('[SIGNATURE DEBUG] 用户拒绝签名，发送拒绝结果');
+        await chrome.runtime.sendMessage({
+          type: 'POPUP_RESPONSE',
+          requestId: requestId,
+          error: {
+            code: 4001,
+            message: 'User rejected the request'
+          }
+        });
       }
 
       // 清理待处理请求
       await chrome.storage.local.remove('pendingSignature');
       setPendingSignature(null);
       
-      // 重置视图状态，确保 popup 重新加载时不会回到签名页面
-      setView('wallet');
+      // 重置视图状态，根据钱包状态决定跳转页面
+      if (walletInfo) {
+        setView('wallet');
+      } else {
+        setView('home');
+      }
     } catch (error) {
       console.error('[SIGNATURE DEBUG] Error handling signature:', error);
       
-      // 跳过消息发送，直接记录日志
-      console.log('[SIGNATURE DEBUG] 签名出错，跳过消息发送，直接执行清理逻辑');
+      const { requestId } = pendingSignature;
       
-      // 即使出错也要重置视图状态
-      setView('wallet');
+      // 发送错误结果给background script
+      console.log('[SIGNATURE DEBUG] 签名出错，发送错误结果');
+      await chrome.runtime.sendMessage({
+        type: 'POPUP_RESPONSE',
+        requestId: requestId,
+        error: {
+          code: -32603,
+          message: error.message || 'Internal error'
+        }
+      });
+      
+      // 清理并重置视图状态
+      await chrome.storage.local.remove('pendingSignature');
+      setPendingSignature(null);
+      
+      // 根据钱包状态决定跳转页面
+      if (walletInfo) {
+        setView('wallet');
+      } else {
+        setView('home');
+      }
     }
-
   };
 
   // 签名消息
@@ -533,20 +621,35 @@ const Popup: React.FC = () => {
 
   // 发送交易
   const sendTransaction = async (transaction: any): Promise<string> => {
-    if (!walletInfo?.privateKey) throw new Error('No wallet available');
+    console.log('[SIGNATURE DEBUG] sendTransaction called, walletInfo available:', !!walletInfo?.privateKey);
     
-    const { ethers } = await import('ethers');
-    const { getCurrentNetwork, getAllNetworks } = await import('../core/wallet');
+    if (!walletInfo?.privateKey) {
+      console.error('[SIGNATURE DEBUG] No wallet private key available');
+      throw new Error('No wallet available');
+    }
     
-    const currentNetwork = await getCurrentNetwork();
-    const allNetworks = await getAllNetworks();
-    const networkConfig = allNetworks[currentNetwork];
-    
-    const provider = new ethers.JsonRpcProvider(networkConfig.rpcUrl);
-    const wallet = new ethers.Wallet(walletInfo.privateKey, provider);
-    
-    const tx = await wallet.sendTransaction(transaction);
-    return tx.hash;
+    try {
+      const { ethers } = await import('ethers');
+      const { getCurrentNetwork, getAllNetworks } = await import('../core/wallet');
+      
+      const currentNetwork = await getCurrentNetwork();
+      const allNetworks = await getAllNetworks();
+      const networkConfig = allNetworks[currentNetwork];
+      
+      console.log('[SIGNATURE DEBUG] Using network:', currentNetwork, 'RPC:', networkConfig.rpcUrl);
+      
+      const provider = new ethers.JsonRpcProvider(networkConfig.rpcUrl);
+      const wallet = new ethers.Wallet(walletInfo.privateKey, provider);
+      
+      console.log('[SIGNATURE DEBUG] Sending transaction:', transaction);
+      const tx = await wallet.sendTransaction(transaction);
+      console.log('[SIGNATURE DEBUG] Transaction successful:', tx.hash);
+      
+      return tx.hash;
+    } catch (error) {
+      console.error('[SIGNATURE DEBUG] Transaction failed:', error);
+      throw error;
+    }
   };
 
   const handleImport = () => {
@@ -1045,7 +1148,16 @@ const Popup: React.FC = () => {
             
             console.log('[SIGNATURE DEBUG] Found valid pending signature request:', signatureResult.pendingSignature);
             setPendingSignature(signatureResult.pendingSignature);
-            setView('signTransaction');
+            
+            // 只有在已有钱包信息时才直接跳转到签名页面
+            // 否则先让用户解锁钱包
+            if (walletInfo?.privateKey) {
+              console.log('[SIGNATURE DEBUG] Wallet info available, navigating to sign transaction');
+              setView('signTransaction');
+            } else {
+              console.log('[SIGNATURE DEBUG] No wallet info available, waiting for wallet unlock...');
+              // 不设置视图，让正常的钱包流程处理（解锁等）
+            }
             return;
           } catch (error) {
             // 如果验证失败，清除无效的请求
@@ -1066,6 +1178,39 @@ const Popup: React.FC = () => {
 
     checkPendingRequests();
   }, []);
+
+  // 当钱包信息可用时，检查是否有待处理的签名请求
+  useEffect(() => {
+    const checkPendingSignatureAfterUnlock = async () => {
+      // 只有在钱包信息刚刚变为可用，且有私钥时才处理
+      if (walletInfo?.privateKey && pendingSignature && view !== 'signTransaction') {
+        console.log('[SIGNATURE DEBUG] Wallet unlocked, checking for pending signature...');
+        
+        try {
+          // 重新验证签名请求
+          const signatureResult = await chrome.storage.local.get('pendingSignature');
+          if (signatureResult.pendingSignature && 
+              signatureResult.pendingSignature.requestId && 
+              signatureResult.pendingSignature.timestamp) {
+            
+            const requestAge = Date.now() - signatureResult.pendingSignature.timestamp;
+            if (requestAge <= 5 * 60 * 1000) { // 5分钟内有效
+              console.log('[SIGNATURE DEBUG] Valid pending signature found after unlock, navigating to sign transaction');
+              setView('signTransaction');
+            } else {
+              console.log('[SIGNATURE DEBUG] Pending signature expired after unlock, clearing');
+              await chrome.storage.local.remove('pendingSignature');
+              setPendingSignature(null);
+            }
+          }
+        } catch (error) {
+          console.error('[SIGNATURE DEBUG] Error checking pending signature after unlock:', error);
+        }
+      }
+    };
+
+    checkPendingSignatureAfterUnlock();
+  }, [walletInfo?.privateKey, pendingSignature, view]);
 
   return (
     <div style={{ 
@@ -1922,6 +2067,45 @@ const Popup: React.FC = () => {
           }}
         >
           {lang === 'zh' ? '连接' : 'Connect'}
+        </button>
+      </div>
+      
+      {/* 返回按钮 */}
+      <div style={{ textAlign: 'center' }}>
+        <button 
+          onClick={() => {
+            // 清理待处理请求
+            chrome.storage.local.remove('pendingAuth').catch(console.error);
+            setPendingAuth(null);
+            
+            // 根据钱包状态决定跳转页面
+            if (walletInfo) {
+              setView('wallet');
+            } else {
+              setView('home');
+            }
+          }}
+          style={{ 
+            padding: '0.5rem 1rem',
+            backgroundColor: 'transparent',
+            color: '#6c757d',
+            border: '1px solid #6c757d',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            fontWeight: '500',
+            transition: 'all 0.2s ease'
+          }}
+          onMouseOver={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
+            (e.target as HTMLElement).style.color = 'white';
+          }}
+          onMouseOut={(e) => {
+            (e.target as HTMLElement).style.backgroundColor = 'transparent';
+            (e.target as HTMLElement).style.color = '#6c757d';
+          }}
+        >
+          {lang === 'zh' ? '返回' : 'Back'}
         </button>
       </div>
     </div>

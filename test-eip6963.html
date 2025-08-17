@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EIP-6963 功能测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+        .test-section h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn-success {
+            background: #28a745;
+        }
+        .btn-success:hover {
+            background: #218838;
+        }
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        .provider-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            background: #fff;
+            margin: 10px 0;
+        }
+        .provider-info {
+            flex: 1;
+        }
+        .provider-name {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .provider-details {
+            font-size: 0.9rem;
+            color: #666;
+        }
+        .provider-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .status.info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        .log-entry.success { color: #28a745; }
+        .log-entry.error { color: #dc3545; }
+        .log-entry.info { color: #007bff; }
+        .log-entry.warning { color: #ffc107; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>EIP-6963 功能测试</h1>
+        <p>这个页面测试 LuckYou Wallet 的 EIP-6963 兼容性，包括 provider 发现、网络切换和网络添加功能。</p>
+    </div>
+
+    <div class="container">
+        <div class="test-section">
+            <h3>1. Provider 发现测试</h3>
+            <p>EIP-6963 允许网页发现所有可用的钱包扩展。点击下面的按钮来测试 provider 发现功能。</p>
+            <button class="btn" onclick="discoverProviders()">发现 Provider</button>
+            <button class="btn" onclick="clearProviders()">清除 Provider 列表</button>
+            
+            <div id="providers-list">
+                <!-- 发现的 provider 将在这里显示 -->
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>2. 网络切换测试</h3>
+            <p>测试 wallet_switchEthereumChain 方法，切换到不同的网络。</p>
+            <div class="form-group">
+                <label>目标链 ID (十六进制):</label>
+                <input type="text" id="switch-chain-id" value="0x1" placeholder="0x1">
+            </div>
+            <button class="btn btn-warning" onclick="switchNetwork()">切换网络</button>
+            <div id="switch-result"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>3. 网络添加测试</h3>
+            <p>测试 wallet_addEthereumChain 方法，添加新的网络。</p>
+            <div class="form-group">
+                <label>链名称:</label>
+                <input type="text" id="add-chain-name" value="Test Network" placeholder="Test Network">
+            </div>
+            <div class="form-group">
+                <label>链 ID (十六进制):</label>
+                <input type="text" id="add-chain-id" value="0x1234" placeholder="0x1234">
+            </div>
+            <div class="form-group">
+                <label>RPC URL:</label>
+                <input type="text" id="add-rpc-url" value="https://test-rpc.example.com" placeholder="https://...">
+            </div>
+            <div class="form-group">
+                <label>货币符号:</label>
+                <input type="text" id="add-currency-symbol" value="TEST" placeholder="TEST">
+            </div>
+            <div class="form-group">
+                <label>区块浏览器 URL (可选):</label>
+                <input type="text" id="add-explorer-url" value="https://test-explorer.example.com" placeholder="https://...">
+            </div>
+            <button class="btn btn-success" onclick="addNetwork()">添加网络</button>
+            <div id="add-result"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>4. 当前状态</h3>
+            <p>显示当前连接的钱包和网络状态。</p>
+            <button class="btn" onclick="checkCurrentStatus()">检查当前状态</button>
+            <div id="current-status"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>5. 操作日志</h3>
+            <div class="log" id="log">
+                <div class="log-entry info">页面加载完成，准备测试 EIP-6963 功能...</div>
+            </div>
+            <button class="btn" onclick="clearLog()">清除日志</button>
+        </div>
+    </div>
+
+    <script>
+        let discoveredProviders = [];
+        let currentProvider = null;
+
+        // 添加日志
+        function addLog(message, type = 'info') {
+            const log = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        // 清除日志
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+            addLog('日志已清除', 'info');
+        }
+
+        // 发现 Provider
+        function discoverProviders() {
+            addLog('开始发现 Provider...', 'info');
+            
+            // 检查是否支持 EIP-6963
+            if (!window.ethereum) {
+                addLog('错误: 未检测到 ethereum provider', 'error');
+                return;
+            }
+
+            // 创建自定义事件来请求 provider
+            const event = new CustomEvent('eip6963:requestProvider', {
+                detail: {
+                    reply: (providerInfo) => {
+                        addLog(`发现 Provider: ${providerInfo.name} (${providerInfo.uuid})`, 'success');
+                        discoveredProviders.push(providerInfo);
+                        displayProviders();
+                    }
+                }
+            });
+
+            // 触发事件
+            window.dispatchEvent(event);
+            
+            // 等待一段时间让所有 provider 响应
+            setTimeout(() => {
+                if (discoveredProviders.length === 0) {
+                    addLog('未发现任何 Provider，可能不支持 EIP-6963', 'warning');
+                } else {
+                    addLog(`发现 ${discoveredProviders.length} 个 Provider`, 'success');
+                }
+            }, 1000);
+        }
+
+        // 显示发现的 Provider
+        function displayProviders() {
+            const container = document.getElementById('providers-list');
+            container.innerHTML = '';
+
+            discoveredProviders.forEach((provider, index) => {
+                const providerItem = document.createElement('div');
+                providerItem.className = 'provider-item';
+                providerItem.innerHTML = `
+                    <div class="provider-info">
+                        <div class="provider-name">${provider.name}</div>
+                        <div class="provider-details">
+                            UUID: ${provider.uuid}<br>
+                            RDNS: ${provider.rdns}
+                        </div>
+                    </div>
+                    <div class="provider-actions">
+                        <button class="btn btn-success" onclick="connectToProvider(${index})">连接</button>
+                    </div>
+                `;
+                container.appendChild(providerItem);
+            });
+        }
+
+        // 清除 Provider 列表
+        function clearProviders() {
+            discoveredProviders = [];
+            document.getElementById('providers-list').innerHTML = '';
+            addLog('Provider 列表已清除', 'info');
+        }
+
+        // 连接到 Provider
+        function connectToProvider(index) {
+            const provider = discoveredProviders[index];
+            addLog(`尝试连接到 ${provider.name}...`, 'info');
+            
+            // 这里应该实现实际的连接逻辑
+            // 由于这是测试页面，我们只是模拟连接
+            currentProvider = provider;
+            addLog(`已连接到 ${provider.name}`, 'success');
+        }
+
+        // 切换网络
+        async function switchNetwork() {
+            const chainId = document.getElementById('switch-chain-id').value;
+            const resultDiv = document.getElementById('switch-result');
+            
+            if (!chainId) {
+                resultDiv.innerHTML = '<div class="status error">请输入链 ID</div>';
+                return;
+            }
+
+            addLog(`尝试切换到网络: ${chainId}`, 'info');
+
+            try {
+                if (window.ethereum && window.ethereum.wallet_switchEthereumChain) {
+                    await window.ethereum.wallet_switchEthereumChain([{ chainId }]);
+                    resultDiv.innerHTML = '<div class="status success">网络切换成功！</div>';
+                    addLog(`成功切换到网络: ${chainId}`, 'success');
+                } else {
+                    throw new Error('Provider 不支持 wallet_switchEthereumChain 方法');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="status error">网络切换失败: ${error.message}</div>`;
+                addLog(`网络切换失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 添加网络
+        async function addNetwork() {
+            const chainName = document.getElementById('add-chain-name').value;
+            const chainId = document.getElementById('add-chain-id').value;
+            const rpcUrl = document.getElementById('add-rpc-url').value;
+            const currencySymbol = document.getElementById('add-currency-symbol').value;
+            const explorerUrl = document.getElementById('add-explorer-url').value;
+            const resultDiv = document.getElementById('add-result');
+
+            if (!chainName || !chainId || !rpcUrl || !currencySymbol) {
+                resultDiv.innerHTML = '<div class="status error">请填写所有必填字段</div>';
+                return;
+            }
+
+            addLog(`尝试添加网络: ${chainName} (${chainId})`, 'info');
+
+            try {
+                if (window.ethereum && window.ethereum.wallet_addEthereumChain) {
+                    const chainInfo = {
+                        chainId: chainId,
+                        chainName: chainName,
+                        rpcUrls: [rpcUrl],
+                        nativeCurrency: {
+                            name: chainName,
+                            symbol: currencySymbol,
+                            decimals: 18
+                        }
+                    };
+
+                    if (explorerUrl) {
+                        chainInfo.blockExplorerUrls = [explorerUrl];
+                    }
+
+                    await window.ethereum.wallet_addEthereumChain([chainInfo]);
+                    resultDiv.innerHTML = '<div class="status success">网络添加成功！</div>';
+                    addLog(`成功添加网络: ${chainName}`, 'success');
+                } else {
+                    throw new Error('Provider 不支持 wallet_addEthereumChain 方法');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="status error">网络添加失败: ${error.message}</div>`;
+                addLog(`网络添加失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 检查当前状态
+        async function checkCurrentStatus() {
+            const statusDiv = document.getElementById('current-status');
+            addLog('检查当前状态...', 'info');
+
+            try {
+                let status = '<div class="status info">';
+
+                // 检查 ethereum provider
+                if (window.ethereum) {
+                    status += '<strong>Ethereum Provider:</strong><br>';
+                    status += `- isMetaMask: ${window.ethereum.isMetaMask}<br>`;
+                    status += `- isLuckYouWallet: ${window.ethereum.isLuckYouWallet || 'N/A'}<br>`;
+                    status += `- isEIP6963: ${window.ethereum.isEIP6963 || 'N/A'}<br>`;
+                    status += `- 支持 wallet_switchEthereumChain: ${!!window.ethereum.wallet_switchEthereumChain}<br>`;
+                    status += `- 支持 wallet_addEthereumChain: ${!!window.ethereum.wallet_addEthereumChain}<br>`;
+                    
+                    // 获取当前网络信息
+                    try {
+                        const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                        status += `- 当前链 ID: ${chainId}<br>`;
+                    } catch (e) {
+                        status += `- 当前链 ID: 获取失败<br>`;
+                    }
+                } else {
+                    status += '<strong>Ethereum Provider:</strong> 未检测到<br>';
+                }
+
+                // 检查 luckyouWallet
+                if (window.luckyouWallet) {
+                    status += '<br><strong>LuckYou Wallet Provider:</strong><br>';
+                    status += `- isLuckYouWallet: ${window.luckyouWallet.isLuckYouWallet}<br>`;
+                    status += `- isEIP6963: ${window.luckyouWallet.isEIP6963 || 'N/A'}<br>`;
+                }
+
+                status += '</div>';
+                statusDiv.innerHTML = status;
+                addLog('状态检查完成', 'success');
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">状态检查失败: ${error.message}</div>`;
+                addLog(`状态检查失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载完成后自动检查状态
+        window.addEventListener('load', () => {
+            addLog('页面加载完成，自动检查状态...', 'info');
+            setTimeout(checkCurrentStatus, 1000);
+        });
+
+        // 监听 ethereum#initialized 事件
+        window.addEventListener('ethereum#initialized', () => {
+            addLog('检测到 ethereum#initialized 事件', 'success');
+        });
+
+        // 监听 EIP-6963 provider 发现事件
+        window.addEventListener('eip6963:requestProvider', (event) => {
+            addLog('收到 EIP-6963 provider 发现请求', 'info');
+        });
+    </script>
+</body>
+</html>
+

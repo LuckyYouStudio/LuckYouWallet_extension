@@ -137,8 +137,8 @@
       if (error) {
         reject(new Error(error.message || 'Request failed'));
       } else {
-        // 根据 JSON-RPC 规范，返回 result 字段
-        resolve(result.result || result);
+        // 直接返回结果，不做二次解包
+        resolve(result);
       }
     }
   });
