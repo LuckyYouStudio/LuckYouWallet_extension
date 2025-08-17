@@ -17,25 +17,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[LuckYou Wallet] Background received message:', message);
 
   if (message.type === 'PROVIDER_REQUEST') {
-    handleProviderRequest(message.data, sender.tab?.id)
-      .then(() => {
+    // 异步处理provider请求，但确保总是有响应
+    (async () => {
+      try {
+        await handleProviderRequest(message.data, sender.tab?.id);
         console.log('[LuckYou Wallet] Provider request handled successfully');
-        // 不调用sendResponse，因为我们通过sendResponseToProvider发送响应
-      })
-      .catch((error) => {
+        // 发送确认响应给background消息系统
+        sendResponse({ success: true, handled: true });
+      } catch (error) {
         console.error('[LuckYou Wallet] Error handling provider request:', error);
-        // 发送错误响应给provider
+        // 发送错误响应给provider（通过自定义通道）
         sendErrorToProvider(message.data.id, {
           code: -32603,
           message: error.message || 'Internal error'
         });
-      });
-    return true; // 保持消息通道开放
+        // 同时响应background消息系统
+        sendResponse({ success: false, error: error.message, handled: true });
+      }
+    })();
+    return true; // 表示将异步响应
   }
 
   if (message.type === 'POPUP_RESPONSE') {
-    handlePopupResponse(message);
-    sendResponse({ success: true }); // 确认收到popup响应
+    try {
+      handlePopupResponse(message);
+      sendResponse({ success: true }); // 确认收到popup响应
+    } catch (error) {
+      console.error('[LuckYou Wallet] Error handling popup response:', error);
+      sendResponse({ success: false, error: error.message });
+    }
     return false; // 同步响应
   }
 
@@ -54,7 +64,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   
   // 未知消息类型
-  sendResponse({ error: 'Unknown message type' });
+  console.warn('[LuckYou Wallet] Unknown message type:', message.type);
+  sendResponse({ error: 'Unknown message type: ' + message.type });
   return false;
 });
 
@@ -64,6 +75,12 @@ async function handleProviderRequest(request: any, tabId?: number) {
   
   console.log('[LuckYou Wallet] Handling provider request:', request);
 
+  // 验证请求格式
+  if (!requestId) {
+    console.error('[LuckYou Wallet] Invalid request: missing id');
+    throw new Error('Invalid request: missing id');
+  }
+
   // 存储请求信息
   pendingRequests.set(requestId, {
     request,
@@ -71,10 +88,23 @@ async function handleProviderRequest(request: any, tabId?: number) {
     timestamp: Date.now()
   });
 
+  // 设置请求超时 (30秒)
+  const timeoutHandle = setTimeout(() => {
+    console.warn('[LuckYou Wallet] Request timeout:', requestId);
+    pendingRequests.delete(requestId);
+    sendErrorToProvider(requestId, {
+      code: -32603,
+      message: 'Request timeout'
+    });
+  }, 30 * 1000);
+
   // 清理过期的请求（5分钟后）
   setTimeout(() => {
     pendingRequests.delete(requestId);
+    clearTimeout(timeoutHandle);
   }, 5 * 60 * 1000);
+
+  try {
 
   // 根据请求类型处理
   switch (request.method) {
@@ -142,6 +172,26 @@ async function handleProviderRequest(request: any, tabId?: number) {
         sendResponseToProvider(requestId, defaultResponse.result);
       }
       break;
+  }
+
+  // 清理超时计时器
+  clearTimeout(timeoutHandle);
+  
+  } catch (error) {
+    console.error('[LuckYou Wallet] Error in handleProviderRequest:', error);
+    clearTimeout(timeoutHandle);
+    
+    // 确保发送错误响应
+    sendErrorToProvider(requestId, {
+      code: -32603,
+      message: error.message || 'Internal error'
+    });
+    
+    // 清理请求
+    pendingRequests.delete(requestId);
+    
+    // 重新抛出错误以便上层处理
+    throw error;
   }
 }
 
@@ -307,36 +357,94 @@ function handlePopupResponse(message: any) {
 function sendResponseToProvider(requestId: string, response: any) {
   console.log('[LuckYou Wallet] Sending response to provider:', requestId, response);
   
-  chrome.tabs.query({}, (tabs) => {
-    tabs.forEach(tab => {
-      if (tab.id) {
-        chrome.tabs.sendMessage(tab.id, {
-          type: 'LUCKYOU_WALLET_RESPONSE',
-          id: requestId,
-          result: response
-        }).catch((error) => {
-          console.warn('[LuckYou Wallet] Failed to send message to tab:', tab.id, error);
-        });
+  if (!requestId) {
+    console.error('[LuckYou Wallet] Cannot send response: missing requestId');
+    return;
+  }
+  
+  try {
+    chrome.tabs.query({}, (tabs) => {
+      if (!tabs || tabs.length === 0) {
+        console.warn('[LuckYou Wallet] No tabs found to send response');
+        return;
       }
+      
+      let sentCount = 0;
+      tabs.forEach(tab => {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'LUCKYOU_WALLET_RESPONSE',
+            id: requestId,
+            result: response
+          }).then(() => {
+            sentCount++;
+            console.log('[LuckYou Wallet] Response sent to tab:', tab.id);
+          }).catch((error) => {
+            // 这是正常的，因为不是所有tab都有content script
+            if (!error.message.includes('receiving end does not exist')) {
+              console.warn('[LuckYou Wallet] Failed to send message to tab:', tab.id, error.message);
+            }
+          });
+        }
+      });
+      
+      // 设置一个短暂的延迟来检查是否成功发送
+      setTimeout(() => {
+        if (sentCount === 0) {
+          console.warn('[LuckYou Wallet] No tabs received the response for request:', requestId);
+        }
+      }, 100);
     });
-  });
+  } catch (error) {
+    console.error('[LuckYou Wallet] Error in sendResponseToProvider:', error);
+  }
 }
 
 // 发送错误给provider
 function sendErrorToProvider(requestId: string, error: any) {
-  chrome.tabs.query({}, (tabs) => {
-    tabs.forEach(tab => {
-      if (tab.id) {
-        chrome.tabs.sendMessage(tab.id, {
-          type: 'LUCKYOU_WALLET_RESPONSE',
-          id: requestId,
-          error
-        }).catch(() => {
-          // 忽略错误，可能tab不存在
-        });
+  console.log('[LuckYou Wallet] Sending error to provider:', requestId, error);
+  
+  if (!requestId) {
+    console.error('[LuckYou Wallet] Cannot send error: missing requestId');
+    return;
+  }
+  
+  try {
+    chrome.tabs.query({}, (tabs) => {
+      if (!tabs || tabs.length === 0) {
+        console.warn('[LuckYou Wallet] No tabs found to send error');
+        return;
       }
+      
+      let sentCount = 0;
+      tabs.forEach(tab => {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'LUCKYOU_WALLET_RESPONSE',
+            id: requestId,
+            error
+          }).then(() => {
+            sentCount++;
+            console.log('[LuckYou Wallet] Error sent to tab:', tab.id);
+          }).catch((sendError) => {
+            // 这是正常的，因为不是所有tab都有content script
+            if (!sendError.message.includes('receiving end does not exist')) {
+              console.warn('[LuckYou Wallet] Failed to send error to tab:', tab.id, sendError.message);
+            }
+          });
+        }
+      });
+      
+      // 设置一个短暂的延迟来检查是否成功发送
+      setTimeout(() => {
+        if (sentCount === 0) {
+          console.warn('[LuckYou Wallet] No tabs received the error for request:', requestId);
+        }
+      }, 100);
     });
-  });
+  } catch (error) {
+    console.error('[LuckYou Wallet] Error in sendErrorToProvider:', error);
+  }
 }
 
 // 打开popup进行授权
@@ -426,18 +534,23 @@ async function openPopupForSignature(requestId: string, request: any) {
 // 获取钱包数据
 async function getWalletData() {
   try {
-    // 首先尝试从 chrome.storage.local 获取
-    const result = await chrome.storage.local.get('wallet_session');
-    if (result.wallet_session) {
-      const walletSession = JSON.parse(result.wallet_session);
+    // 首先尝试从 chrome.storage.session 获取 (浏览器进程会话)
+    const sessionResult = await chrome.storage.session.get('wallet_session');
+    if (sessionResult.wallet_session) {
+      const walletSession = JSON.parse(sessionResult.wallet_session);
+      console.log('[LuckYou Wallet] 从浏览器进程会话获取钱包数据');
       return walletSession.info;
     }
     
-    // 如果 chrome.storage.local 中没有，尝试从 localStorage 获取
-    // 注意：background script 无法直接访问 localStorage，需要通过 content script
-    console.log('[LuckYou Wallet] No wallet found in chrome.storage.local, checking localStorage...');
+    // 如果 session 中没有，尝试从 chrome.storage.local 获取 (向后兼容)
+    const localResult = await chrome.storage.local.get('wallet_session');
+    if (localResult.wallet_session) {
+      const walletSession = JSON.parse(localResult.wallet_session);
+      console.log('[LuckYou Wallet] 从本地存储获取钱包数据 (向后兼容)');
+      return walletSession.info;
+    }
     
-    // 返回 null，让 content script 处理
+    console.log('[LuckYou Wallet] 未找到活跃的钱包会话');
     return null;
   } catch (error) {
     console.error('[LuckYou Wallet] Error getting wallet data:', error);

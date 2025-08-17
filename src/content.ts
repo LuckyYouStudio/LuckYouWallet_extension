@@ -279,12 +279,20 @@ window.addEventListener('message', async (event) => {
       data: event.data
     });
 
-    // 发送响应回provider
-    window.postMessage({
-      type: 'LUCKYOU_WALLET_RESPONSE',
-      id: event.data.id,
-      result: response
-    }, '*');
+    // 只有在收到错误或立即可用的结果时才直接响应
+    // 对于需要用户交互的请求（如eth_requestAccounts），等待background通过onMessage发送真正的响应
+    if (response && (response.error || response.result !== undefined)) {
+      console.log('[LuckYou Wallet] Sending immediate response:', response);
+      window.postMessage({
+        type: 'LUCKYOU_WALLET_RESPONSE',
+        id: event.data.id,
+        result: response.result || response,
+        error: response.error
+      }, '*');
+    } else {
+      console.log('[LuckYou Wallet] Waiting for background response via onMessage...');
+      // 对于异步请求，不在这里响应，等待background的消息
+    }
 
   } catch (error) {
     console.error('[LuckYou Wallet] Error handling provider request:', error);

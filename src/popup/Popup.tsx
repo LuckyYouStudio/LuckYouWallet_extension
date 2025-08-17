@@ -69,7 +69,7 @@ type View =
 
 const STORAGE_KEY = 'encryptedWallet';
 const SESSION_KEY = 'walletSession';
-const SESSION_TTL = 5 * 60 * 1000; // 5 minutes
+// 移除 SESSION_TTL - 改为浏览器会话锁定
 const NETWORK_STORAGE_KEY = 'selectedNetwork';
 const LANGUAGE_STORAGE_KEY = 'language';
 const HISTORY_STORAGE_KEY = 'txHistory';
@@ -169,7 +169,7 @@ const Popup: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [lang, setLang] = useState<Lang>((): Lang => (localStorage.getItem(LANGUAGE_STORAGE_KEY) as Lang) || 'en');
   const t = (key: TranslationKey) => translations[lang][key];
-  const logoutTimer = useRef<NodeJS.Timeout | null>(null);
+  // 移除 logoutTimer - 不再需要定时器
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [tokenBalances, setTokenBalances] = useState<Record<string, string>>({});
   const [tokenAddress, setTokenAddress] = useState('');
@@ -192,16 +192,16 @@ const Popup: React.FC = () => {
     token?: TokenInfo;
   } | null>(null);
 
-  const clearLogoutTimer = () => {
-    if (logoutTimer.current) {
-      clearTimeout(logoutTimer.current);
-      logoutTimer.current = null;
-    }
-  };
-
+  // 使用浏览器进程会话锁定
   const logout = () => {
-    clearLogoutTimer();
-    localStorage.removeItem(SESSION_KEY);
+    // 清理浏览器进程会话存储
+    if (chrome.storage && chrome.storage.session) {
+      chrome.storage.session.remove('wallet_session').catch(console.error);
+    }
+    // 清理 localStorage 降级存储
+    localStorage.removeItem('walletSession');
+    // 同时清理 chrome.storage.local
+    chrome.storage.local.remove('wallet_session').catch(console.error);
     setWalletInfo(null);
     setView('unlock');
   };
@@ -211,47 +211,85 @@ const Popup: React.FC = () => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, l);
   };
 
-  const startSessionTimer = (ms: number) => {
-    clearLogoutTimer();
-    logoutTimer.current = setTimeout(logout, ms);
-  };
+  // 移除 startSessionTimer - 不再需要定时器
 
   useEffect(() => {
-    let sessionValid = false;
-    const sessionRaw = localStorage.getItem(SESSION_KEY);
-    if (sessionRaw) {
+    const initializeWallet = async () => {
+      console.log('[LuckYou Wallet] 开始初始化钱包...');
+      
       try {
-        const s: WalletSession = JSON.parse(sessionRaw);
-        const elapsed = Date.now() - s.timestamp;
-        if (elapsed < SESSION_TTL) {
-          setWalletInfo(s.info);
-          setSource(s.source);
-          setView('wallet');
-          sessionValid = true;
-          startSessionTimer(SESSION_TTL - elapsed);
-          
-          // 不在这里加载余额，等待网络加载完成后再加载
+        // 从 chrome.storage.session 读取，实现浏览器进程会话锁定
+        console.log('[LuckYou Wallet] 检查浏览器进程会话...');
+        
+        let sessionResult = { wallet_session: null };
+        
+        // 检查 chrome.storage.session 是否可用
+        if (chrome.storage && chrome.storage.session) {
+          try {
+            sessionResult = await chrome.storage.session.get('wallet_session');
+            console.log('[LuckYou Wallet] 从 chrome.storage.session 获取会话结果:', sessionResult);
+          } catch (sessionError) {
+            console.warn('[LuckYou Wallet] chrome.storage.session 不可用，降级到 localStorage:', sessionError);
+            // 降级到 localStorage
+            const localSession = localStorage.getItem('walletSession');
+            if (localSession) {
+              sessionResult = { wallet_session: localSession };
+            }
+          }
         } else {
-          localStorage.removeItem(SESSION_KEY);
+          console.warn('[LuckYou Wallet] chrome.storage.session API 不存在，使用 localStorage');
+          // 降级到 localStorage
+          const localSession = localStorage.getItem('walletSession');
+          if (localSession) {
+            sessionResult = { wallet_session: localSession };
+          }
         }
-      } catch (e) {
-        console.error('Failed to parse session', e);
-        localStorage.removeItem(SESSION_KEY);
+        
+        if (sessionResult.wallet_session) {
+          try {
+            const s: WalletSession = JSON.parse(sessionResult.wallet_session);
+            // 移除时间检查，直接使用会话数据
+            setWalletInfo(s.info);
+            setSource(s.source);
+            setView('wallet');
+            
+            console.log('[LuckYou Wallet] 从浏览器进程会话恢复钱包状态');
+            return; // 成功恢复会话，退出
+          } catch (e) {
+            console.error('Failed to parse session', e);
+            chrome.storage.session.remove('wallet_session').catch(console.error);
+          }
+        }
+        
+        // 如果没有进程会话，检查是否有本地存储的钱包需要解锁
+        console.log('[LuckYou Wallet] 检查本地存储钱包...');
+        const stored = localStorage.getItem(STORAGE_KEY);
+        
+        if (stored) {
+          try {
+            const w: StoredWallet = JSON.parse(stored);
+            setEncryptedWallet(w.encrypted);
+            setSource(w.source); // 设置source以便解锁后保存会话
+            setView('unlock');
+            console.log('[LuckYou Wallet] 检测到本地钱包，需要解锁');
+          } catch (e) {
+            console.error('Failed to parse stored wallet', e);
+            localStorage.removeItem(STORAGE_KEY);
+            setView('home'); // 改为 home 而不是 welcome
+          }
+        } else {
+          // 没有钱包，显示首页
+          setView('home');
+          console.log('[LuckYou Wallet] 未检测到钱包，显示首页');
+        }
+      } catch (error) {
+        console.error('[LuckYou Wallet] Error initializing wallet:', error);
+        // 出错时显示首页，允许用户创建或导入钱包
+        setView('home');
       }
-    }
-
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && !sessionValid) {
-      try {
-        const w: StoredWallet = JSON.parse(stored);
-        setEncryptedWallet(w.encrypted);
-        setSource(w.source);
-        setView('unlock');
-      } catch (e) {
-        console.error('Failed to parse stored wallet', e);
-        localStorage.removeItem(STORAGE_KEY);
-      }
-    }
+    };
+    
+    initializeWallet();
   }, []);
 
   useEffect(() => {
@@ -379,11 +417,25 @@ const Popup: React.FC = () => {
     const session: WalletSession = {
       info,
       source: src,
-      timestamp: Date.now(),
+      timestamp: Date.now(), // 保留时间戳用于日志记录
     };
     
-    // 存储到 localStorage
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    // 存储到 chrome.storage.session (浏览器进程关闭后自动清除)
+    if (chrome.storage && chrome.storage.session) {
+      try {
+        await chrome.storage.session.set({ wallet_session: JSON.stringify(session) });
+        console.log('[LuckYou Wallet] 钱包会话已保存到浏览器进程会话存储');
+      } catch (error) {
+        console.error('[LuckYou Wallet] Failed to save wallet session to chrome.storage.session:', error);
+        // 降级到 localStorage
+        localStorage.setItem('walletSession', JSON.stringify(session));
+        console.log('[LuckYou Wallet] 降级保存到 localStorage');
+      }
+    } else {
+      // 降级到 localStorage
+      localStorage.setItem('walletSession', JSON.stringify(session));
+      console.log('[LuckYou Wallet] chrome.storage.session 不可用，保存到 localStorage');
+    }
     
     // 同时存储到 chrome.storage.local 供 background script 使用
     try {
@@ -392,8 +444,6 @@ const Popup: React.FC = () => {
     } catch (error) {
       console.error('[LuckYou Wallet] Failed to save wallet session to chrome.storage.local:', error);
     }
-    
-    startSessionTimer(SESSION_TTL);
   };
 
   const handleCreate = () => {
@@ -986,13 +1036,20 @@ const Popup: React.FC = () => {
     setTokens([]);
     setTokenBalances({});
     setTokenAddress('');
-    clearLogoutTimer();
-    localStorage.removeItem(SESSION_KEY);
+    // 清理浏览器进程会话
+    if (chrome.storage && chrome.storage.session) {
+      chrome.storage.session.remove('wallet_session').catch(console.error);
+    }
+    localStorage.removeItem('walletSession');
   };
 
   const clearWallet = () => {
     localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(SESSION_KEY);
+    // 清理浏览器进程会话
+    if (chrome.storage && chrome.storage.session) {
+      chrome.storage.session.remove('wallet_session').catch(console.error);
+    }
+    localStorage.removeItem('walletSession');
     backHome();
   };
 
