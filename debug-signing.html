@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LuckYou Wallet 签名调试工具</title>
+</head>
+<body>
+    <h1>LuckYou Wallet 签名调试工具</h1>
+    
+    <div>
+        <h2>1. 检查扩展状态</h2>
+        <button onclick="checkExtensionStatus()">检查扩展状态</button>
+        <div id="extensionStatus"></div>
+    </div>
+    
+    <div>
+        <h2>2. 检查存储状态</h2>
+        <button onclick="checkStorage()">检查Chrome Storage</button>
+        <div id="storageStatus"></div>
+    </div>
+    
+    <div>
+        <h2>3. 测试签名请求</h2>
+        <button onclick="testPersonalSign()">测试 personal_sign</button>
+        <button onclick="testEthSign()">测试 eth_sign</button>
+        <div id="signResult"></div>
+    </div>
+    
+    <div>
+        <h2>4. 监听钱包事件</h2>
+        <button onclick="startListening()">开始监听</button>
+        <button onclick="stopListening()">停止监听</button>
+        <div id="eventLog"></div>
+    </div>
+
+    <script>
+        let eventListener = null;
+        
+        async function checkExtensionStatus() {
+            const statusDiv = document.getElementById('extensionStatus');
+            statusDiv.innerHTML = '<p>检查中...</p>';
+            
+            try {
+                // 检查 provider 状态
+                const checks = {
+                    'window.ethereum': !!window.ethereum,
+                    'window.luckyouWallet': !!window.luckyouWallet,
+                    'ethereum.isLuckYouWallet': window.ethereum?.isLuckYouWallet,
+                    'luckyouWallet.isLuckYouWallet': window.luckyouWallet?.isLuckYouWallet,
+                    'provider.request method': typeof (window.luckyouWallet?.request || window.ethereum?.request) === 'function'
+                };
+                
+                let html = '<h3>Provider 状态:</h3>';
+                for (const [key, value] of Object.entries(checks)) {
+                    html += `<p>${key}: <strong style="color: ${value ? 'green' : 'red'}">${value}</strong></p>`;
+                }
+                
+                // 检查连接状态
+                const provider = window.luckyouWallet || window.ethereum;
+                if (provider) {
+                    try {
+                        const accounts = await provider.request({ method: 'eth_accounts' });
+                        html += `<p>已连接账户: <strong>${accounts.length > 0 ? accounts[0] : '未连接'}</strong></p>`;
+                    } catch (error) {
+                        html += `<p>获取账户失败: <strong style="color: red">${error.message}</strong></p>`;
+                    }
+                }
+                
+                statusDiv.innerHTML = html;
+            } catch (error) {
+                statusDiv.innerHTML = `<p style="color: red">检查失败: ${error.message}</p>`;
+            }
+        }
+        
+        async function checkStorage() {
+            const statusDiv = document.getElementById('storageStatus');
+            statusDiv.innerHTML = '<p>检查存储状态...</p>';
+            
+            try {
+                // 检查扩展存储 - 这个需要在扩展的context中执行
+                statusDiv.innerHTML = `
+                    <p><strong>注意:</strong> 存储检查需要在扩展context中进行</p>
+                    <p>请在扩展的devtools console中执行:</p>
+                    <pre style="background: #f5f5f5; padding: 10px; border-radius: 4px;">
+chrome.storage.local.get(['pendingSignature', 'wallet_session']).then(console.log);
+chrome.storage.session.get(['wallet_session']).then(console.log);
+                    </pre>
+                `;
+            } catch (error) {
+                statusDiv.innerHTML = `<p style="color: red">检查失败: ${error.message}</p>`;
+            }
+        }
+        
+        async function testPersonalSign() {
+            const resultDiv = document.getElementById('signResult');
+            resultDiv.innerHTML = '<p>发送 personal_sign 请求...</p>';
+            
+            try {
+                const provider = window.luckyouWallet || window.ethereum;
+                if (!provider) {
+                    throw new Error('未找到钱包provider');
+                }
+                
+                // 先获取账户
+                const accounts = await provider.request({ method: 'eth_requestAccounts' });
+                if (!accounts || accounts.length === 0) {
+                    throw new Error('未连接账户');
+                }
+                
+                const message = "测试签名消息 - " + new Date().toISOString();
+                console.log('[DEBUG] 发送 personal_sign 请求:', { message, account: accounts[0] });
+                
+                const signature = await provider.request({
+                    method: 'personal_sign',
+                    params: [message, accounts[0]]
+                });
+                
+                resultDiv.innerHTML = `
+                    <p style="color: green">✅ 签名成功!</p>
+                    <p><strong>消息:</strong> ${message}</p>
+                    <p><strong>签名:</strong> ${signature}</p>
+                `;
+            } catch (error) {
+                console.error('[DEBUG] personal_sign 失败:', error);
+                resultDiv.innerHTML = `<p style="color: red">❌ 签名失败: ${error.message}</p>`;
+            }
+        }
+        
+        async function testEthSign() {
+            const resultDiv = document.getElementById('signResult');
+            resultDiv.innerHTML = '<p>发送 eth_sign 请求...</p>';
+            
+            try {
+                const provider = window.luckyouWallet || window.ethereum;
+                if (!provider) {
+                    throw new Error('未找到钱包provider');
+                }
+                
+                // 先获取账户
+                const accounts = await provider.request({ method: 'eth_requestAccounts' });
+                if (!accounts || accounts.length === 0) {
+                    throw new Error('未连接账户');
+                }
+                
+                const message = "测试签名消息 - " + new Date().toISOString();
+                const hexMessage = '0x' + Buffer.from(message, 'utf8').toString('hex');
+                console.log('[DEBUG] 发送 eth_sign 请求:', { message, hexMessage, account: accounts[0] });
+                
+                const signature = await provider.request({
+                    method: 'eth_sign',
+                    params: [accounts[0], hexMessage]
+                });
+                
+                resultDiv.innerHTML = `
+                    <p style="color: green">✅ 签名成功!</p>
+                    <p><strong>消息:</strong> ${message}</p>
+                    <p><strong>签名:</strong> ${signature}</p>
+                `;
+            } catch (error) {
+                console.error('[DEBUG] eth_sign 失败:', error);
+                resultDiv.innerHTML = `<p style="color: red">❌ 签名失败: ${error.message}</p>`;
+            }
+        }
+        
+        function startListening() {
+            const logDiv = document.getElementById('eventLog');
+            logDiv.innerHTML = '<p>开始监听钱包事件...</p>';
+            
+            eventListener = (event) => {
+                if (event.data && event.data.type && event.data.type.includes('LUCKYOU')) {
+                    const timestamp = new Date().toLocaleTimeString();
+                    const eventInfo = `[${timestamp}] ${event.data.type}: ${JSON.stringify(event.data, null, 2)}`;
+                    console.log('[EVENT]', eventInfo);
+                    logDiv.innerHTML += `<pre style="background: #f5f5f5; padding: 5px; margin: 5px 0; border-radius: 3px; font-size: 12px;">${eventInfo}</pre>`;
+                }
+            };
+            
+            window.addEventListener('message', eventListener);
+            logDiv.innerHTML += '<p style="color: green">✅ 事件监听已开始</p>';
+        }
+        
+        function stopListening() {
+            if (eventListener) {
+                window.removeEventListener('message', eventListener);
+                eventListener = null;
+                document.getElementById('eventLog').innerHTML += '<p style="color: orange">⏹️ 事件监听已停止</p>';
+            }
+        }
+        
+        // 页面加载时自动检查状态
+        window.addEventListener('load', () => {
+            checkExtensionStatus();
+            startListening();
+        });
+    </script>
+</body>
+</html>

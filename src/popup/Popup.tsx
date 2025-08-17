@@ -109,6 +109,7 @@ const Popup: React.FC = () => {
   const [pendingAuth, setPendingAuth] = useState<any>(null);
   const [pendingSignature, setPendingSignature] = useState<any>(null);
   const [currentSite, setCurrentSite] = useState<string>('');
+  const [isSigningPending, setIsSigningPending] = useState(false);
   
   // 调试：跟踪余额变化
   const setBalanceWithLog = (newBalance: string, source: string) => {
@@ -549,6 +550,8 @@ const Popup: React.FC = () => {
     try {
       if (approved && walletInfo) {
         console.log('[SIGNATURE DEBUG] Processing approved signature request');
+        setIsSigningPending(true); // 开始签名，显示加载状态
+        
         const { requestId, request } = pendingSignature;
         
         // 再次验证钱包信息
@@ -602,6 +605,7 @@ const Popup: React.FC = () => {
       // 清理待处理请求
       await chrome.storage.local.remove('pendingSignature');
       setPendingSignature(null);
+      setIsSigningPending(false); // 清除加载状态
       
       // 重置视图状态，根据钱包状态决定跳转页面
       if (walletInfo) {
@@ -628,6 +632,7 @@ const Popup: React.FC = () => {
       // 清理并重置视图状态
       await chrome.storage.local.remove('pendingSignature');
       setPendingSignature(null);
+      setIsSigningPending(false); // 清除加载状态
       
       // 根据钱包状态决定跳转页面
       if (walletInfo) {
@@ -637,6 +642,43 @@ const Popup: React.FC = () => {
       }
     }
   };
+
+  // 加载动画组件
+  const LoadingSpinner: React.FC<{ message?: string }> = ({ message = 'Processing...' }) => (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 9999,
+      color: 'white'
+    }}>
+      <div style={{
+        width: '40px',
+        height: '40px',
+        border: '4px solid rgba(255, 255, 255, 0.3)',
+        borderTop: '4px solid #007bff',
+        borderRadius: '50%',
+        animation: 'spin 1s linear infinite',
+        marginBottom: '16px'
+      }} />
+      <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>
+        {message}
+      </p>
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+    </div>
+  );
 
   // 签名消息
   const signMessage = async (message: string, address: string): Promise<string> => {
@@ -2289,49 +2331,78 @@ const Popup: React.FC = () => {
       <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
         <button 
           onClick={() => handleSignTransaction(false)}
+          disabled={isSigningPending}
           style={{ 
             flex: 1,
             padding: '0.75rem',
-            backgroundColor: '#6c757d',
+            backgroundColor: isSigningPending ? '#adb5bd' : '#6c757d',
             color: 'white',
             border: 'none',
             borderRadius: '6px',
-            cursor: 'pointer',
+            cursor: isSigningPending ? 'not-allowed' : 'pointer',
             fontSize: '0.875rem',
             fontWeight: '500',
-            transition: 'background-color 0.2s ease'
+            transition: 'background-color 0.2s ease',
+            opacity: isSigningPending ? 0.6 : 1
           }}
           onMouseOver={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#5a6268';
+            if (!isSigningPending) {
+              (e.target as HTMLElement).style.backgroundColor = '#5a6268';
+            }
           }}
           onMouseOut={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
+            if (!isSigningPending) {
+              (e.target as HTMLElement).style.backgroundColor = '#6c757d';
+            }
           }}
         >
           {lang === 'zh' ? '拒绝' : 'Reject'}
         </button>
         <button 
           onClick={() => handleSignTransaction(true)}
+          disabled={isSigningPending}
           style={{ 
             flex: 1,
             padding: '0.75rem',
-            backgroundColor: '#28a745',
+            backgroundColor: isSigningPending ? '#28a745' : '#28a745',
             color: 'white',
             border: 'none',
             borderRadius: '6px',
-            cursor: 'pointer',
+            cursor: isSigningPending ? 'not-allowed' : 'pointer',
             fontSize: '0.875rem',
             fontWeight: '500',
-            transition: 'background-color 0.2s ease'
+            transition: 'background-color 0.2s ease',
+            opacity: isSigningPending ? 0.8 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px'
           }}
           onMouseOver={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#218838';
+            if (!isSigningPending) {
+              (e.target as HTMLElement).style.backgroundColor = '#218838';
+            }
           }}
           onMouseOut={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#28a745';
+            if (!isSigningPending) {
+              (e.target as HTMLElement).style.backgroundColor = '#28a745';
+            }
           }}
         >
-          {lang === 'zh' ? '签名' : 'Sign'}
+          {isSigningPending && (
+            <div style={{
+              width: '16px',
+              height: '16px',
+              border: '2px solid rgba(255, 255, 255, 0.3)',
+              borderTop: '2px solid white',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite'
+            }} />
+          )}
+          {isSigningPending 
+            ? (lang === 'zh' ? '签名中...' : 'Signing...') 
+            : (lang === 'zh' ? '签名' : 'Sign')
+          }
         </button>
       </div>
       
@@ -2363,6 +2434,13 @@ const Popup: React.FC = () => {
         </button>
       </div>
     </div>
+  )}
+  
+  {/* 签名加载遮罩层 */}
+  {isSigningPending && (
+    <LoadingSpinner 
+      message={lang === 'zh' ? '正在签名，请稍候...' : 'Signing, please wait...'}
+    />
   )}
   </div>
   );

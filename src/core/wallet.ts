@@ -259,12 +259,20 @@ export interface TokenInfo {
 export function createWallet(): WalletInfo {
   const wallet = Wallet.createRandom();
   const mnemonic = (wallet as any).mnemonic?.phrase || '';
-  return { mnemonic, address: wallet.address };
+  return { 
+    mnemonic, 
+    address: wallet.address,
+    privateKey: wallet.privateKey
+  };
 }
 
 export function importWallet(mnemonic: string): WalletInfo {
   const wallet = Wallet.fromPhrase(mnemonic.trim());
-  return { mnemonic: (wallet as any).mnemonic?.phrase || '', address: wallet.address };
+  return { 
+    mnemonic: (wallet as any).mnemonic?.phrase || '', 
+    address: wallet.address,
+    privateKey: wallet.privateKey
+  };
 }
 
 export function importWalletByPrivateKey(privateKey: string): WalletInfo {
@@ -320,7 +328,11 @@ export async function encryptWalletData(walletData: { mnemonic: string; privateK
 
 export async function decryptWallet(encryptedJson: string, password: string): Promise<WalletInfo> {
   const wallet = await Wallet.fromEncryptedJson(encryptedJson, password);
-  return { mnemonic: (wallet as any).mnemonic?.phrase || '', address: wallet.address };
+  return { 
+    mnemonic: (wallet as any).mnemonic?.phrase || '', 
+    address: wallet.address,
+    privateKey: wallet.privateKey
+  };
 }
 
 export async function getEthBalance(address: string, network: NetworkKey): Promise<string> {
