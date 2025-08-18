@@ -3,7 +3,7 @@ import { defineManifest } from '@crxjs/vite-plugin';
 export default defineManifest({
   manifest_version: 3,
   name: 'LuckYou Wallet',
-  version: '0.1.0',
+  version: '0.2.0',
   description: 'A secure and user-friendly Web3 wallet extension',
   icons: {
     '16': 'icons/icon16.png',

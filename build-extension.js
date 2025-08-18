@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 
+// 从package.json读取版本号
+const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const version = packageJson.version;
+
 // 构建脚本 - 生成 Chrome 扩展
 async function buildExtension() {
   console.log('Building Chrome Extension...');
@@ -40,7 +44,7 @@ async function buildExtension() {
   const manifest = {
     manifest_version: 3,
     name: 'LuckYou Wallet',
-    version: '0.1.0',
+    version: version, // 使用从package.json读取的版本号
     description: 'A secure and user-friendly Web3 wallet extension',
     icons: {
       16: 'icon16.png',
