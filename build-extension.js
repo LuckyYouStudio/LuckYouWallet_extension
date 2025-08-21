@@ -60,7 +60,6 @@ async function buildExtension() {
     permissions: [
       'storage',
       'activeTab',
-      'scripting',
       'notifications'
     ],
     host_permissions: [
