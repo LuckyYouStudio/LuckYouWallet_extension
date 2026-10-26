@@ -31,6 +31,10 @@
   - 实时余额更新
   - 网络状态显示
 
+## iOS App
+
+`mobile/` 目录是基于 Expo (React Native) 的 iOS 版本，与插件共享 `src/core/wallet.ts` 钱包核心。开发、安全设计与上架流程见 [mobile/README.md](mobile/README.md)。
+
 ## 网络管理使用指南
 
 ### 添加自定义网络
