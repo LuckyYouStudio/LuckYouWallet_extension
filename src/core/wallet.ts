@@ -15,6 +15,41 @@ import {
 // 使用 any 类型避免 Chrome API 类型冲突
 declare const chrome: any;
 
+/**
+ * 键值存储适配器：浏览器插件使用 chrome.storage.local，iOS App 使用 AsyncStorage。
+ * 只用于非敏感数据（网络配置等），密钥绝不经过这里。
+ */
+export interface KeyValueStorage {
+  get<T = unknown>(key: string): Promise<T | undefined>;
+  set(key: string, value: unknown): Promise<void>;
+}
+
+const chromeStorage: KeyValueStorage | null =
+  typeof chrome !== 'undefined' && chrome?.storage?.local
+    ? {
+        async get(key) {
+          const result = await chrome.storage.local.get(key);
+          return result[key];
+        },
+        async set(key, value) {
+          await chrome.storage.local.set({ [key]: value });
+        },
+      }
+    : null;
+
+let storage: KeyValueStorage | null = chromeStorage;
+
+export function configureStorage(adapter: KeyValueStorage): void {
+  storage = adapter;
+}
+
+function requireStorage(): KeyValueStorage {
+  if (!storage) {
+    throw new Error('Storage not configured');
+  }
+  return storage;
+}
+
 export interface NetworkConfig {
   name: string;
   rpcUrl: string;
@@ -27,7 +62,7 @@ export interface NetworkConfig {
 export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
   mainnet: {
     name: 'Ethereum Mainnet',
-    rpcUrl: 'https://eth.llamarpc.com',
+    rpcUrl: 'https://ethereum-rpc.publicnode.com',
     chainId: 1,
     currencySymbol: 'ETH',
     blockExplorer: 'https://etherscan.io',
@@ -55,9 +90,9 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
   },
   polygon: {
     name: 'Polygon',
-    rpcUrl: 'https://polygon-rpc.com',
+    rpcUrl: 'https://polygon-bor-rpc.publicnode.com',
     chainId: 137,
-    currencySymbol: 'MATIC',
+    currencySymbol: 'POL',
     blockExplorer: 'https://polygonscan.com',
   },
   bsc: {
@@ -85,65 +120,48 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
 
 export type NetworkKey = keyof typeof DEFAULT_NETWORKS | string;
 
+// 按 RPC + 链 ID 复用 provider。指定 staticNetwork 可省去 chainId 探测，
+// 也避免节点不可用时 ethers 在后台无限重试探测网络
+const providers = new Map<string, JsonRpcProvider>();
+
+export function getProvider(network: NetworkConfig): JsonRpcProvider {
+  const key = `${network.chainId}:${network.rpcUrl}`;
+  let provider = providers.get(key);
+  if (!provider) {
+    provider = new JsonRpcProvider(network.rpcUrl, network.chainId, { staticNetwork: true });
+    providers.set(key, provider);
+  }
+  return provider;
+}
+
 // 网络管理相关函数
 export async function addCustomNetwork(network: Omit<NetworkConfig, 'isCustom'>): Promise<void> {
-  if (!chrome?.storage?.local) {
-    throw new Error('Chrome storage API not available');
-  }
-  
   const customNetworks = await getCustomNetworks();
-  const networkKey = `custom_${network.chainId}`;
-  
-  customNetworks[networkKey] = {
-    ...network,
-    isCustom: true,
-  };
-  
-  await chrome.storage.local.set({ customNetworks });
+  customNetworks[`custom_${network.chainId}`] = { ...network, isCustom: true };
+  await requireStorage().set('customNetworks', customNetworks);
 }
 
 export async function removeCustomNetwork(chainId: number): Promise<void> {
-  if (!chrome?.storage?.local) {
-    throw new Error('Chrome storage API not available');
-  }
-  
   const customNetworks = await getCustomNetworks();
-  const networkKey = `custom_${chainId}`;
-  
-  delete customNetworks[networkKey];
-  await chrome.storage.local.set({ customNetworks });
+  delete customNetworks[`custom_${chainId}`];
+  await requireStorage().set('customNetworks', customNetworks);
 }
 
 export async function updateCustomNetwork(networkKey: string, network: Omit<NetworkConfig, 'isCustom'>): Promise<void> {
-  if (!chrome?.storage?.local) {
-    throw new Error('Chrome storage API not available');
-  }
-  
   const customNetworks = await getCustomNetworks();
-  
-  // 检查网络是否存在
   if (!customNetworks[networkKey]) {
     throw new Error('Network not found');
   }
-  
-  // 更新网络配置
-  customNetworks[networkKey] = {
-    ...network,
-    isCustom: true,
-  };
-  
-  await chrome.storage.local.set({ customNetworks });
+  customNetworks[networkKey] = { ...network, isCustom: true };
+  await requireStorage().set('customNetworks', customNetworks);
 }
 
 export async function getCustomNetworks(): Promise<Record<string, NetworkConfig>> {
-  if (!chrome?.storage?.local) {
-    console.warn('Chrome storage API not available, returning empty custom networks');
+  if (!storage) {
     return {};
   }
-  
   try {
-    const result = await chrome.storage.local.get('customNetworks');
-    return result.customNetworks || {};
+    return (await storage.get<Record<string, NetworkConfig>>('customNetworks')) || {};
   } catch (error) {
     console.error('Failed to get custom networks:', error);
     return {};
@@ -157,21 +175,18 @@ export async function getAllNetworks(): Promise<Record<string, NetworkConfig>> {
 
 export async function getNetworkByChainId(chainId: number): Promise<NetworkConfig | null> {
   const allNetworks = await getAllNetworks();
-  
-  for (const [key, network] of Object.entries(allNetworks)) {
-    if (network.chainId === chainId) {
-      return network;
-    }
-  }
-  
-  return null;
+  return Object.values(allNetworks).find((network) => network.chainId === chainId) || null;
 }
 
 export async function validateNetwork(rpcUrl: string, chainId: number): Promise<boolean> {
   try {
-    const provider = new JsonRpcProvider(rpcUrl);
-    const network = await provider.getNetwork();
-    return network.chainId === BigInt(chainId);
+    const provider = new JsonRpcProvider(rpcUrl, undefined, { staticNetwork: true });
+    try {
+      const network = await provider._detectNetwork();
+      return network.chainId === BigInt(chainId);
+    } finally {
+      provider.destroy();
+    }
   } catch (error) {
     console.error('Network validation failed:', error);
     return false;
@@ -179,55 +194,19 @@ export async function validateNetwork(rpcUrl: string, chainId: number): Promise<
 }
 
 export async function getCurrentNetwork(): Promise<NetworkKey> {
-  if (!chrome?.storage?.local) {
-    console.warn('Chrome storage API not available, returning default network');
-    return 'hardhat'; // 开发环境默认使用Hardhat
+  if (!storage) {
+    return 'mainnet';
   }
-  
   try {
-    const result = await chrome.storage.local.get('selectedNetwork');
-    console.log('Retrieved network from storage:', result);
-    const network = result.selectedNetwork || 'hardhat'; // 默认使用Hardhat本地网络
-    console.log('Using network:', network);
-    return network;
+    return (await storage.get<NetworkKey>('selectedNetwork')) || 'mainnet';
   } catch (error) {
     console.error('Failed to get current network:', error);
-    return 'hardhat'; // 开发环境默认使用Hardhat
+    return 'mainnet';
   }
 }
 
 export async function setCurrentNetwork(networkKey: NetworkKey): Promise<void> {
-  if (!chrome?.storage?.local) {
-    console.error('Chrome storage API not available');
-    throw new Error('Chrome storage API not available');
-  }
-  
-  try {
-    console.log('Saving network to storage:', networkKey);
-    await chrome.storage.local.set({ selectedNetwork: networkKey });
-    console.log('Network successfully saved:', networkKey);
-    
-    // 立即验证保存是否成功
-    const result = await chrome.storage.local.get('selectedNetwork');
-    console.log('Verification - retrieved network:', result);
-    
-    if (result.selectedNetwork !== networkKey) {
-      console.warn('Network save verification failed. Expected:', networkKey, 'Got:', result.selectedNetwork);
-      // 重试一次
-      await chrome.storage.local.set({ selectedNetwork: networkKey });
-      const retryResult = await chrome.storage.local.get('selectedNetwork');
-      if (retryResult.selectedNetwork !== networkKey) {
-        console.error('Network save retry also failed');
-      } else {
-        console.log('Network save retry successful');
-      }
-    } else {
-      console.log('Network save verification successful');
-    }
-  } catch (error) {
-    console.error('Failed to save current network:', error);
-    throw error;
-  }
+  await requireStorage().set('selectedNetwork', networkKey);
 }
 
 // 更新现有的NETWORKS常量以使用新的NetworkConfig接口
@@ -336,55 +315,29 @@ export async function decryptWallet(encryptedJson: string, password: string): Pr
 }
 
 export async function getEthBalance(address: string, network: NetworkKey): Promise<string> {
-  console.log(`[BALANCE DEBUG] getEthBalance called with address: ${address}, network: ${network}`);
-  
   const allNetworks = await getAllNetworks();
-  console.log(`[BALANCE DEBUG] All networks:`, Object.keys(allNetworks));
-  console.log(`[BALANCE DEBUG] Looking for network: ${network}`);
-  
   const networkConfig = allNetworks[network];
   if (!networkConfig) {
-    console.error(`[BALANCE DEBUG] Network ${network} not found in:`, Object.keys(allNetworks));
     throw new Error(`Network ${network} not found`);
   }
-  
-  console.log(`[BALANCE DEBUG] Network config:`, networkConfig);
-  console.log(`[BALANCE DEBUG] RPC URL: ${networkConfig.rpcUrl}`);
-  
-  // 添加重试机制
+
+  // 公共 RPC 偶有抖动，失败后重试
   const maxRetries = 3;
   let lastError: any;
-  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`[BALANCE DEBUG] Attempt ${attempt}/${maxRetries} - Getting balance from provider...`);
-      
-      const provider = new JsonRpcProvider(networkConfig.rpcUrl);
-      
+      const provider = getProvider(networkConfig);
       const balance = await provider.getBalance(address);
-      console.log(`[BALANCE DEBUG] Raw balance from provider:`, balance);
-      console.log(`[BALANCE DEBUG] Balance type:`, typeof balance);
-      
-      const normalized = typeof balance === 'bigint' ? balance : BigInt(balance as any);
-      console.log(`[BALANCE DEBUG] Normalized balance:`, normalized);
-      
-      const formatted = formatEther(normalized);
-      console.log(`[BALANCE DEBUG] Formatted balance: ${formatted} ETH`);
-      
-      return formatted;
+      return formatEther(typeof balance === 'bigint' ? balance : BigInt(balance as any));
     } catch (error) {
       lastError = error;
-      console.error(`[BALANCE DEBUG] Attempt ${attempt} failed:`, error);
-      
       if (attempt < maxRetries) {
-        console.log(`[BALANCE DEBUG] Retrying in 1 second...`);
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
   }
-  
-  console.error(`[BALANCE DEBUG] All ${maxRetries} attempts failed. Last error:`, lastError);
-  throw new Error(`Failed to get balance after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
+  console.warn(`[LuckYou Wallet] Failed to get balance on ${network}:`, lastError?.shortMessage || lastError?.message);
+  throw new Error(`Failed to get balance after ${maxRetries} attempts: ${lastError?.shortMessage || lastError?.message || 'Unknown error'}`);
 }
 
 export async function sendEth(
@@ -398,7 +351,7 @@ export async function sendEth(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   
   let wallet: any;
   if (mnemonic.trim()) {
@@ -425,7 +378,7 @@ export async function sendEthWithPrivateKey(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   const wallet = new Wallet(privateKey).connect(provider);
   
   const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth) });
@@ -454,7 +407,7 @@ export async function estimateGasForEth(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   const gasLimit = await provider.estimateGas({
     from,
     to,
@@ -489,7 +442,7 @@ export async function estimateGasForToken(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   const contract = new Contract(token.address, ERC20_ABI, provider);
   const value = parseUnits(amount, token.decimals);
   
@@ -520,7 +473,7 @@ export async function getTransactionHistory(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   const records: TransactionRecord[] = [];
   let latest: number;
   try {
@@ -601,7 +554,7 @@ export async function getTokenInfo(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   const checksummed = getAddress(address);
   // First try standard string metadata
   try {
@@ -641,7 +594,7 @@ export async function getTokenBalance(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   const contract = new Contract(token.address, ERC20_ABI, provider);
   const balance = await contract.balanceOf(owner);
   const normalized = typeof balance === 'bigint' ? balance : BigInt(balance as any);
@@ -657,7 +610,7 @@ export async function detectTokens(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   let latest: number;
   try {
     latest = await provider.getBlockNumber();
@@ -706,7 +659,7 @@ export async function isTokenContract(
   if (!networkConfig) {
     return false;
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   try {
     const code = await provider.getCode(getAddress(address));
     return !!code && code !== '0x';
@@ -727,11 +680,33 @@ export async function sendToken(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   const wallet = Wallet.fromPhrase(mnemonic.trim()).connect(provider);
   const contract = new Contract(token.address, ERC20_ABI, wallet);
   const value = parseUnits(amount, token.decimals);
   const tx = await contract.transfer(to, value);
+  const receipt = await tx.wait();
+  const status = receipt ? Number((receipt as any).status ?? 0) : 0;
+  const hash = receipt ? String((receipt as any).hash || tx.hash) : String(tx.hash);
+  return { hash, status };
+}
+
+export async function sendTokenWithPrivateKey(
+  privateKey: string,
+  token: TokenInfo,
+  to: string,
+  amount: string,
+  network: NetworkKey,
+): Promise<{ hash: string; status: number }> {
+  const allNetworks = await getAllNetworks();
+  const networkConfig = allNetworks[network];
+  if (!networkConfig) {
+    throw new Error(`Network ${network} not found`);
+  }
+  const provider = getProvider(networkConfig);
+  const wallet = new Wallet(privateKey).connect(provider);
+  const contract = new Contract(token.address, ERC20_ABI, wallet);
+  const tx = await contract.transfer(to, parseUnits(amount, token.decimals));
   const receipt = await tx.wait();
   const status = receipt ? Number((receipt as any).status ?? 0) : 0;
   const hash = receipt ? String((receipt as any).hash || tx.hash) : String(tx.hash);
@@ -748,7 +723,7 @@ export async function getTokenTransferHistory(
   if (!networkConfig) {
     throw new Error(`Network ${network} not found`);
   }
-  const provider = new JsonRpcProvider(networkConfig.rpcUrl);
+  const provider = getProvider(networkConfig);
   let latest: number;
   try {
     latest = await provider.getBlockNumber();
