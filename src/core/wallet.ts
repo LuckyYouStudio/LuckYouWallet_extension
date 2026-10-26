@@ -11,6 +11,7 @@ import {
   isAddress,
   getAddress,
 } from 'ethers';
+import { KNOWN_TOKENS } from './tokens';
 
 // 使用 any 类型避免 Chrome API 类型冲突
 declare const chrome: any;
@@ -57,8 +58,11 @@ export interface NetworkConfig {
   currencySymbol: string;
   blockExplorer?: string;
   isCustom?: boolean;
+  isTestnet?: boolean;
+  isLocal?: boolean;
 }
 
+// 与 MetaMask 默认支持的网络保持一致 (RPC 与链 ID 均已实测)
 export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
   mainnet: {
     name: 'Ethereum Mainnet',
@@ -67,40 +71,19 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
     currencySymbol: 'ETH',
     blockExplorer: 'https://etherscan.io',
   },
-  hardhat: {
-    name: 'Hardhat Local Network',
-    rpcUrl: 'http://127.0.0.1:8545',
-    chainId: 31337,
+  linea: {
+    name: 'Linea',
+    rpcUrl: 'https://rpc.linea.build',
+    chainId: 59144,
     currencySymbol: 'ETH',
-    blockExplorer: '',
+    blockExplorer: 'https://lineascan.build',
   },
-  localhost: {
-    name: 'Localhost',
-    rpcUrl: 'http://localhost:8545',
-    chainId: 1337,
+  base: {
+    name: 'Base',
+    rpcUrl: 'https://mainnet.base.org',
+    chainId: 8453,
     currencySymbol: 'ETH',
-    blockExplorer: '',
-  },
-  sepolia: {
-    name: 'Sepolia Testnet',
-    rpcUrl: 'https://ethereum-sepolia.publicnode.com',
-    chainId: 11155111,
-    currencySymbol: 'ETH',
-    blockExplorer: 'https://sepolia.etherscan.io',
-  },
-  polygon: {
-    name: 'Polygon',
-    rpcUrl: 'https://polygon-bor-rpc.publicnode.com',
-    chainId: 137,
-    currencySymbol: 'POL',
-    blockExplorer: 'https://polygonscan.com',
-  },
-  bsc: {
-    name: 'BNB Smart Chain',
-    rpcUrl: 'https://bsc-dataseed1.binance.org',
-    chainId: 56,
-    currencySymbol: 'BNB',
-    blockExplorer: 'https://bscscan.com',
+    blockExplorer: 'https://basescan.org',
   },
   arbitrum: {
     name: 'Arbitrum One',
@@ -110,13 +93,101 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
     blockExplorer: 'https://arbiscan.io',
   },
   optimism: {
-    name: 'Optimism',
+    name: 'OP Mainnet',
     rpcUrl: 'https://mainnet.optimism.io',
     chainId: 10,
     currencySymbol: 'ETH',
     blockExplorer: 'https://optimistic.etherscan.io',
   },
-} as const;
+  polygon: {
+    name: 'Polygon',
+    rpcUrl: 'https://polygon-bor-rpc.publicnode.com',
+    chainId: 137,
+    currencySymbol: 'POL',
+    blockExplorer: 'https://polygonscan.com',
+  },
+  bsc: {
+    name: 'BNB Chain',
+    rpcUrl: 'https://bsc-dataseed1.binance.org',
+    chainId: 56,
+    currencySymbol: 'BNB',
+    blockExplorer: 'https://bscscan.com',
+  },
+  avalanche: {
+    name: 'Avalanche C-Chain',
+    rpcUrl: 'https://api.avax.network/ext/bc/C/rpc',
+    chainId: 43114,
+    currencySymbol: 'AVAX',
+    blockExplorer: 'https://snowtrace.io',
+  },
+  zksync: {
+    name: 'zkSync Era',
+    rpcUrl: 'https://mainnet.era.zksync.io',
+    chainId: 324,
+    currencySymbol: 'ETH',
+    blockExplorer: 'https://explorer.zksync.io',
+  },
+  sei: {
+    name: 'Sei',
+    rpcUrl: 'https://evm-rpc.sei-apis.com',
+    chainId: 1329,
+    currencySymbol: 'SEI',
+    blockExplorer: 'https://seiscan.io',
+  },
+  monad: {
+    name: 'Monad',
+    rpcUrl: 'https://rpc.monad.xyz',
+    chainId: 143,
+    currencySymbol: 'MON',
+    blockExplorer: 'https://monadscan.com',
+  },
+  hyperevm: {
+    name: 'HyperEVM',
+    rpcUrl: 'https://rpc.hyperliquid.xyz/evm',
+    chainId: 999,
+    currencySymbol: 'HYPE',
+    blockExplorer: 'https://hyperevmscan.io',
+  },
+  megaeth: {
+    name: 'MegaETH',
+    rpcUrl: 'https://mainnet.megaeth.com/rpc',
+    chainId: 4326,
+    currencySymbol: 'ETH',
+    blockExplorer: 'https://mega.etherscan.io',
+  },
+  sepolia: {
+    name: 'Sepolia',
+    rpcUrl: 'https://ethereum-sepolia.publicnode.com',
+    chainId: 11155111,
+    currencySymbol: 'SepoliaETH',
+    blockExplorer: 'https://sepolia.etherscan.io',
+    isTestnet: true,
+  },
+  lineaSepolia: {
+    name: 'Linea Sepolia',
+    rpcUrl: 'https://rpc.sepolia.linea.build',
+    chainId: 59141,
+    currencySymbol: 'LineaETH',
+    blockExplorer: 'https://sepolia.lineascan.build',
+    isTestnet: true,
+  },
+  hardhat: {
+    name: 'Hardhat Local Network',
+    rpcUrl: 'http://127.0.0.1:8545',
+    chainId: 31337,
+    currencySymbol: 'ETH',
+    blockExplorer: '',
+    isLocal: true,
+  },
+  localhost: {
+    name: 'Localhost',
+    rpcUrl: 'http://localhost:8545',
+    chainId: 1337,
+    currencySymbol: 'ETH',
+    blockExplorer: '',
+    isLocal: true,
+  },
+};
 
 export type NetworkKey = keyof typeof DEFAULT_NETWORKS | string;
 
@@ -647,6 +718,23 @@ export async function detectTokens(
     }
   }
   return tokens;
+}
+
+/** 检测当前链内置主流代币中有余额的那些，返回代币及余额 */
+export async function detectKnownTokens(
+  owner: string,
+  network: NetworkKey,
+): Promise<{ token: TokenInfo; balance: string }[]> {
+  const allNetworks = await getAllNetworks();
+  const networkConfig = allNetworks[network];
+  const candidates = networkConfig ? KNOWN_TOKENS[networkConfig.chainId] || [] : [];
+  const results = await Promise.allSettled(candidates.map((token) => getTokenBalance(token, owner, network)));
+  return candidates
+    .map((token, i) => {
+      const r = results[i];
+      return { token, balance: r.status === 'fulfilled' ? r.value : '0' };
+    })
+    .filter(({ balance }) => Number(balance) > 0);
 }
 
 export async function isTokenContract(

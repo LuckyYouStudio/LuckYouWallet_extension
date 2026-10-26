@@ -14,12 +14,10 @@
 
 ### 网络管理功能
 - 🏗️ **预设网络支持**：
-  - Ethereum Mainnet
-  - Sepolia Testnet
-  - Polygon
-  - BSC (Binance Smart Chain)
-  - Arbitrum One
-  - Optimism
+  - Ethereum、Linea、Base、Arbitrum One、OP Mainnet、Polygon、BNB Chain
+  - Avalanche C-Chain、zkSync Era、Sei、Monad、HyperEVM、MegaETH
+  - 测试网：Sepolia、Linea Sepolia
+  - 各链内置主流代币，自动检测余额（`src/core/tokens.ts`）
 
 - ⚙️ **自定义网络添加**：
   - 支持添加任意EVM兼容网络
