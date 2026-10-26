@@ -15,7 +15,8 @@
       },
       "infoPlist": {
         "NSFaceIDUsageDescription": "Use Face ID to unlock your wallet and approve transactions."
-      }
+      },
+      "appleTeamId": "JU4P42JZ54"
     },
     "android": {
       "adaptiveIcon": {
