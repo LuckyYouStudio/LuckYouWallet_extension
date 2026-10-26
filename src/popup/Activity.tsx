@@ -1,76 +1,85 @@
 import React, { useState } from 'react';
 import { TransactionRecord, WalletInfo } from '../core/wallet';
 import { TranslationKey } from '../core/i18n';
+import { Icon, PageHeader, shortAddress, formatAmount } from './ui';
 
 interface ActivityProps {
   records: TransactionRecord[];
   wallet: WalletInfo;
   onBack: () => void;
   t: (key: TranslationKey) => string;
+  symbol: string;
+  explorerBase: string;
 }
 
-const Activity: React.FC<ActivityProps> = ({ records, wallet, onBack, t }) => {
+const Activity: React.FC<ActivityProps> = ({ records, wallet, onBack, t, symbol, explorerBase }) => {
   const address = wallet.address.toLowerCase();
   const sent = records.filter((r) => r.from.toLowerCase() === address);
   const [selected, setSelected] = useState<TransactionRecord | null>(null);
 
   if (selected) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <button onClick={() => setSelected(null)}>{t('back')}</button>
-        <h3>{t('transactionDetails')}</h3>
-        <p>
-          <strong>{t('hash')}:</strong> {selected.hash}
-        </p>
-        <p>
-          <strong>{t('from')}:</strong> {selected.from}
-        </p>
-        <p>
-          <strong>{t('to')}:</strong> {selected.to}
-        </p>
-        <p>
-          <strong>{t('value')}:</strong> {selected.value} ETH
-        </p>
-        <p>
-          <strong>{t('status')}:</strong>{' '}
-          {selected.status === 1 ? t('success') : t('fail')}
-        </p>
-        <a
-          href={`https://sepolia.etherscan.io/tx/${selected.hash}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {t('viewOnEtherscan')}
-        </a>
+      <div className="page">
+        <PageHeader title={t('transactionDetails')} onBack={() => setSelected(null)} />
+        <div className="card center">
+          <div className="avatar sent receive-avatar" style={{ margin: '0 auto 10px' }}>
+            <Icon name="arrowUp" size={24} />
+          </div>
+          <div className="balance-amount" style={{ fontSize: 26 }}>
+            -{formatAmount(selected.value)}<span className="sym" style={{ fontSize: 14 }}>{symbol}</span>
+          </div>
+          <span className={`status-pill ${selected.status === 1 ? 'ok' : 'fail'}`}>
+            {selected.status === 1 ? t('success') : t('fail')}
+          </span>
+        </div>
+        <div className="card">
+          <div className="kv"><span className="k">{t('from')}</span><span className="v mono">{selected.from}</span></div>
+          <div className="kv"><span className="k">{t('to')}</span><span className="v mono">{selected.to}</span></div>
+          <div className="kv"><span className="k">{t('hash')}</span><span className="v mono">{selected.hash}</span></div>
+        </div>
+        {explorerBase && (
+          <a
+            className="btn btn-secondary"
+            style={{ textDecoration: 'none' }}
+            href={`${explorerBase}/tx/${selected.hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Icon name="external" size={16} /> {t('viewOnEtherscan')}
+          </a>
+        )}
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <button onClick={onBack}>{t('back')}</button>
-      <h3>{t('activity')}</h3>
+    <div className="page">
+      <PageHeader title={t('activity')} onBack={onBack} />
       {sent.length === 0 ? (
-        <p>{t('noTransactions')}</p>
+        <div className="empty">
+          <div className="empty-icon"><Icon name="activity" /></div>
+          {t('noTransactions')}
+        </div>
       ) : (
-        <ul style={{ maxHeight: '150px', overflowY: 'auto', paddingLeft: '1rem' }}>
+        <div className="list">
           {sent.map((r) => (
-            <li key={r.hash}>
-              <button
-                onClick={() => setSelected(r)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  textAlign: 'left',
-                }}
-              >
-                Sent {r.value} ETH to {r.to} ({r.status === 1 ? t('success') : t('fail')})
-              </button>
-            </li>
+            <button key={r.hash} className="list-item" onClick={() => setSelected(r)}>
+              <div className="avatar sent"><Icon name="arrowUp" size={16} /></div>
+              <div className="main">
+                <div className="title">{t('send')}</div>
+                <div className="sub mono">{shortAddress(r.to)}</div>
+              </div>
+              <div className="end">
+                -{formatAmount(r.value)} {symbol}
+                <div>
+                  <span className={`status-pill ${r.status === 1 ? 'ok' : 'fail'}`}>
+                    {r.status === 1 ? t('success') : t('fail')}
+                  </span>
+                </div>
+              </div>
+            </button>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );

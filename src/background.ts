@@ -542,13 +542,8 @@ async function getWalletData() {
       return walletSession.info;
     }
     
-    // 如果 session 中没有，尝试从 chrome.storage.local 获取 (向后兼容)
-    const localResult = await chrome.storage.local.get('wallet_session');
-    if (localResult.wallet_session) {
-      const walletSession = JSON.parse(localResult.wallet_session);
-      console.log('[LuckYou Wallet] 从本地存储获取钱包数据 (向后兼容)');
-      return walletSession.info;
-    }
+    // 清理旧版本遗留在磁盘上的明文会话
+    await chrome.storage.local.remove('wallet_session');
     
     console.log('[LuckYou Wallet] 未找到活跃的钱包会话');
     return null;

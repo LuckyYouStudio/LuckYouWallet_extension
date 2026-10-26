@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LuckYou Wallet — Popup Preview</title>
+    <style>body { display: flex; justify-content: center; padding: 24px 0; background: #05060a !important; }</style>
+    <script>
+      // 开发预览：用内存实现模拟 chrome.* API，便于在普通浏览器中调试 popup UI
+      (function () {
+        const makeArea = () => {
+          const data = {};
+          return {
+            async get(keys) {
+              if (keys == null) return { ...data };
+              const list = typeof keys === 'string' ? [keys] : Array.isArray(keys) ? keys : Object.keys(keys);
+              const out = {};
+              list.forEach((k) => { if (k in data) out[k] = data[k]; });
+              return out;
+            },
+            async set(items) { Object.assign(data, items); },
+            async remove(keys) { [].concat(keys).forEach((k) => delete data[k]); },
+            async clear() { Object.keys(data).forEach((k) => delete data[k]); },
+          };
+        };
+        window.chrome = {
+          storage: { local: makeArea(), session: makeArea(), onChanged: { addListener() {} } },
+          runtime: { sendMessage: async () => ({}), onMessage: { addListener() {}, removeListener() {} }, getURL: (p) => p, id: 'preview' },
+          tabs: { query: async () => [], get: async () => ({}), sendMessage: async () => ({}) },
+          action: { openPopup() {} },
+          windows: { create() {} },
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/popup/popup.entry.tsx"></script>
+  </body>
+</html>
