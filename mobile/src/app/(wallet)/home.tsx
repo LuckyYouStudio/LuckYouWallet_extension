@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { SymbolViewProps } from 'expo-symbols';
-import { Avatar, Button, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
+import { Alert, Avatar, Button, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
 import { formatAmount, shortAddress } from '@/lib/format';
 import { colors, gradient } from '@/theme';
@@ -14,18 +14,19 @@ const Action: React.FC<{ icon: SymbolViewProps['name']; label: string; onPress: 
   <Pressable style={styles.action} onPress={onPress}>
     {({ pressed }) => (
       <>
-        <View style={[styles.actionIcon, pressed && { backgroundColor: colors.primarySoft, borderColor: colors.primary }]}>
-          <Icon name={icon} size={20} />
-        </View>
-        <Text style={styles.actionLabel}>{label}</Text>
+          <View style={[styles.actionIcon, pressed && { backgroundColor: colors.primarySoft, borderColor: colors.primary }]}>
+            <Icon name={icon} size={20} />
+          </View>
+          <Text style={styles.actionLabel}>{label}</Text>
       </>
     )}
   </Pressable>
 );
 
 export default function Home() {
-  const { t, address, network, balance, tokens, tokenBalances, refreshing, refresh } = useWallet();
-  const symbol = network?.currencySymbol || 'ETH';
+  const { t, address, unsupported, network, balance, tokens, tokenBalances, refreshing, refresh } = useWallet();
+  const symbol = network?.symbol || 'ETH';
+  const isEvm = network?.family === 'evm';
   const [copied, setCopied] = React.useState(false);
 
   const copyAddress = async () => {
@@ -48,49 +49,55 @@ export default function Home() {
         </Pressable>
       </View>
 
-      <LinearGradient colors={gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.card}>
-        <View style={styles.cardCircle} />
-        <Pressable style={styles.addressChip} onPress={copyAddress}>
-          <Text style={styles.addressText}>{copied ? t('copied') : shortAddress(address)}</Text>
-          <Icon name={copied ? 'checkmark' : 'doc.on.doc'} size={12} color="#fff" />
-        </Pressable>
-        <Text style={styles.balanceLabel}>{t('balance')}</Text>
-        <View style={styles.balanceRow}>
-          <Text style={styles.balance} numberOfLines={1} adjustsFontSizeToFit>
-            {balance == null ? (refreshing ? '···' : '—') : formatAmount(balance)}
-          </Text>
-          <Text style={styles.balanceSymbol}>{symbol}</Text>
+      {unsupported ? (
+        <Alert tone="warning">{t('needsPhrase')}</Alert>
+      ) : (
+        <>
+        <LinearGradient colors={gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.card}>
+          <View style={styles.cardCircle} />
+          <Pressable style={styles.addressChip} onPress={copyAddress}>
+            <Text style={styles.addressText}>{copied ? t('copied') : shortAddress(address)}</Text>
+            <Icon name={copied ? 'checkmark' : 'doc.on.doc'} size={12} color="#fff" />
+          </Pressable>
+          <Text style={styles.balanceLabel}>{t('balance')}</Text>
+          <View style={styles.balanceRow}>
+            <Text style={styles.balance} numberOfLines={1} adjustsFontSizeToFit>
+              {balance == null ? (refreshing ? '···' : '—') : formatAmount(balance)}
+            </Text>
+            <Text style={styles.balanceSymbol}>{symbol}</Text>
+          </View>
+        </LinearGradient>
+
+        <View style={styles.actions}>
+          <Action icon="arrow.up.right" label={t('send')} onPress={() => router.push('/send')} />
+          <Action icon="arrow.down.left" label={t('receive')} onPress={() => router.push('/receive')} />
+          <Action icon="clock.arrow.circlepath" label={t('activity')} onPress={() => router.push('/activity')} />
+          {isEvm && <Action icon="plus" label={t('token')} onPress={() => router.push('/add-token')} />}
         </View>
-      </LinearGradient>
 
-      <View style={styles.actions}>
-        <Action icon="arrow.up.right" label={t('send')} onPress={() => router.push('/send')} />
-        <Action icon="arrow.down.left" label={t('receive')} onPress={() => router.push('/receive')} />
-        <Action icon="clock.arrow.circlepath" label={t('activity')} onPress={() => router.push('/activity')} />
-        <Action icon="plus" label={t('token')} onPress={() => router.push('/add-token')} />
-      </View>
-
-      <SectionTitle title={t('assets')} />
-      <View style={{ gap: 8 }}>
-        <ListItem
-          left={<LinearGradient colors={gradient} style={styles.nativeAvatar}><Text style={styles.nativeAvatarText}>{symbol[0]}</Text></LinearGradient>}
-          title={symbol}
-          subtitle={network?.name}
-          right={<Text style={styles.amount}>{balance == null ? '—' : formatAmount(balance)}</Text>}
-          onPress={() => router.push('/send')}
-        />
-        {tokens.map((token) => (
+        <SectionTitle title={t('assets')} />
+        <View style={{ gap: 8 }}>
           <ListItem
-            key={token.address}
-            left={<Avatar label={token.symbol} seed={token.address} />}
-            title={token.symbol}
-            subtitle={token.name}
-            right={<Text style={styles.amount}>{formatAmount(tokenBalances[token.address] || '0')}</Text>}
-            onPress={() => router.push({ pathname: '/token/[address]', params: { address: token.address } })}
+            left={<LinearGradient colors={gradient} style={styles.nativeAvatar}><Text style={styles.nativeAvatarText}>{symbol[0]}</Text></LinearGradient>}
+            title={symbol}
+            subtitle={network?.name}
+            right={<Text style={styles.amount}>{balance == null ? '—' : formatAmount(balance)}</Text>}
+            onPress={() => router.push('/send')}
           />
-        ))}
-      </View>
-      <Button title={`+ ${t('addToken')}`} variant="ghost" onPress={() => router.push('/add-token')} />
+          {tokens.map((token) => (
+            <ListItem
+              key={token.address}
+              left={<Avatar label={token.symbol} seed={token.address} />}
+              title={token.symbol}
+              subtitle={token.name}
+              right={<Text style={styles.amount}>{formatAmount(tokenBalances[token.address] || '0')}</Text>}
+              onPress={() => router.push({ pathname: '/token/[address]', params: { address: token.address } })}
+            />
+          ))}
+        </View>
+        {isEvm && <Button title={`+ ${t('addToken')}`} variant="ghost" onPress={() => router.push('/add-token')} />}
+        </>
+      )}
     </Screen>
   );
 }
@@ -120,7 +127,7 @@ const styles = StyleSheet.create({
   balanceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 4 },
   balance: { color: '#fff', fontSize: 40, fontWeight: '800', letterSpacing: -1, flexShrink: 1 },
   balanceSymbol: { color: 'rgba(255,255,255,0.85)', fontSize: 18, fontWeight: '700' },
-  actions: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 6 },
+  actions: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 6 },
   action: { alignItems: 'center', gap: 8, width: 72 },
   actionIcon: { width: 58, height: 58, borderRadius: 19, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   actionLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },

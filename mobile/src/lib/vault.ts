@@ -3,6 +3,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import * as Crypto from 'expo-crypto';
 import { pbkdf2, hexlify, toUtf8Bytes } from 'ethers';
 import { kv } from './storage';
+import type { ChainAccounts } from '@/chains';
 
 /**
  * 密钥保险库：钱包密钥只存放在 iOS Keychain 中 (仅本机、设备解锁时可访问，不随 iCloud 备份迁移)。
@@ -13,6 +14,8 @@ export interface WalletSecret {
   address: string;
   privateKey: string;
   mnemonic?: string;
+  /** 由助记词派生的比特币 / Solana / Tron 账户 (私钥导入的钱包没有) */
+  chains?: ChainAccounts;
 }
 
 const SECRET_KEY = 'luckyou.wallet';
@@ -53,6 +56,11 @@ export async function saveWallet(secret: WalletSecret, password: string): Promis
   const record: PasswordRecord = { salt, hash: hashPassword(password, salt, PBKDF2_ITERATIONS), iterations: PBKDF2_ITERATIONS };
   await SecureStore.setItemAsync(SECRET_KEY, JSON.stringify(secret), OPTIONS);
   await SecureStore.setItemAsync(PASSWORD_KEY, JSON.stringify(record), OPTIONS);
+}
+
+/** 更新密钥内容 (如为旧钱包补充多链账户)，不改变密码 */
+export async function updateSecret(secret: WalletSecret): Promise<void> {
+  await SecureStore.setItemAsync(SECRET_KEY, JSON.stringify(secret), OPTIONS);
 }
 
 export async function verifyPassword(password: string): Promise<boolean> {

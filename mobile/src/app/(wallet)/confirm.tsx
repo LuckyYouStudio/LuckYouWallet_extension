@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { estimateGasForEth, estimateGasForToken, GasEstimate } from '@core/wallet';
+import type { FeeQuote } from '@/chains';
 import { Alert, Button, Card, Icon, KeyValue, Screen } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
 import { useAuthorize } from '@/lib/useAuthorize';
@@ -13,32 +13,29 @@ type Phase = 'review' | 'sending' | 'done' | 'failed';
 
 export default function Confirm() {
   const params = useLocalSearchParams<{ to: string; amount: string; token?: string }>();
-  const { t, address, networkKey, network, tokens, sendNative, sendToken } = useWallet();
+  const { t, address, network, tokens, estimateFee, send } = useWallet();
   const authorize = useAuthorize();
   const token = useMemo(() => tokens.find((x) => x.address === params.token), [tokens, params.token]);
-  const nativeSymbol = network?.currencySymbol || 'ETH';
+  const nativeSymbol = network?.symbol || 'ETH';
   const symbol = token ? token.symbol : nativeSymbol;
 
-  const [estimate, setEstimate] = useState<GasEstimate | null>(null);
+  const [estimate, setEstimate] = useState<FeeQuote | null>(null);
   const [estimateError, setEstimateError] = useState(false);
   const [phase, setPhase] = useState<Phase>('review');
   const [hash, setHash] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    (token
-      ? estimateGasForToken(address, token, params.to, params.amount, networkKey)
-      : estimateGasForEth(address, params.to, params.amount, networkKey)
-    )
+    estimateFee(params.to, params.amount, token)
       .then(setEstimate)
       .catch(() => setEstimateError(true));
-  }, [address, token, params.to, params.amount, networkKey]);
+  }, [estimateFee, token, params.to, params.amount]);
 
   const submit = async () => {
     if (!(await authorize(t('confirm')))) return;
     setPhase('sending');
     try {
-      const result = token ? await sendToken(token, params.to, params.amount) : await sendNative(params.to, params.amount);
+      const result = await send(params.to, params.amount, token);
       setHash(result.hash);
       setPhase(result.status === 1 ? 'done' : 'failed');
       Haptics.notificationAsync(result.status === 1 ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error);
@@ -49,7 +46,7 @@ export default function Confirm() {
     }
   };
 
-  const explorer = (network?.blockExplorer || '').replace(/\/$/, '');
+  const txUrl = network?.txUrl;
 
   if (phase === 'done' || phase === 'failed') {
     const ok = phase === 'done';
@@ -57,7 +54,7 @@ export default function Confirm() {
       <Screen
         footer={
           <>
-            {hash && explorer ? <Button title={t('viewExplorer')} variant="secondary" icon="safari" onPress={() => Linking.openURL(`${explorer}/tx/${hash}`)} /> : null}
+            {hash && txUrl ? <Button title={t('viewExplorer')} variant="secondary" icon="safari" onPress={() => Linking.openURL(txUrl(hash))} /> : null}
             <Button title={t('finish')} onPress={() => router.dismissTo('/home')} />
           </>
         }
@@ -69,6 +66,7 @@ export default function Confirm() {
           <Text style={styles.resultTitle}>{ok ? t('sent') : t('sendFailed')}</Text>
           <Text style={styles.resultAmount}>{params.amount} {symbol}</Text>
           {hash ? <Text style={styles.hash} selectable>{hash}</Text> : null}
+          {ok && network?.family === 'bitcoin' ? <Alert>{t('btcConfirmNote')}</Alert> : null}
           {error ? <Alert tone="danger">{error}</Alert> : null}
         </View>
       </Screen>
@@ -99,9 +97,9 @@ export default function Confirm() {
       <Card>
         {estimate ? (
           <>
-            <KeyValue first k={t('networkFee')} v={`${formatAmount(estimate.totalCost, 8)} ${nativeSymbol}`} />
+            <KeyValue first k={t('networkFee')} v={`${formatAmount(estimate.fee, 8)} ${nativeSymbol}`} />
             {!token && (
-              <KeyValue k={t('total')} v={`${formatAmount(String(Number(params.amount) + Number(estimate.totalCost)), 8)} ${nativeSymbol}`} highlight />
+              <KeyValue k={t('total')} v={`${formatAmount(String(Number(params.amount) + Number(estimate.fee)), 8)} ${nativeSymbol}`} highlight />
             )}
           </>
         ) : estimateError ? (

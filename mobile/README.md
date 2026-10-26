@@ -27,6 +27,20 @@ mobile/
     └── theme.ts             # Design tokens shared with the extension
 ```
 
+## Supported chains (same as MetaMask's defaults)
+
+| Type | Networks |
+| --- | --- |
+| EVM (shared with the extension) | Ethereum, Linea, Base, Arbitrum One, OP Mainnet, Polygon, BNB Chain, Avalanche C-Chain, zkSync Era, Sei, Monad, HyperEVM, MegaETH; testnets Sepolia and Linea Sepolia |
+| Non-EVM (app only) | Bitcoin, Solana, Tron; testnets Bitcoin Testnet4, Solana Devnet and Tron Nile |
+
+- One recovery phrase derives every chain. The paths match the major wallets, so importing the same phrase into MetaMask / Phantom / TronLink gives the same addresses:
+  BTC `m/84'/0'/0'/0/0` (native SegWit bc1…), SOL `m/44'/501'/0'/0'`, TRX `m/44'/195'/0'/0/0`, EVM `m/44'/60'/0'/0/0`.
+- Wallets imported from a private key only support EVM networks.
+- Built-in popular tokens are detected automatically (any with a balance are shown). Addresses and decimals were checked on-chain: `src/core/tokens.ts` (EVM), plus the token lists in `mobile/src/chains/solana.ts` and `tron.ts`.
+- Tron transactions are built by the node; before signing, the app checks locally that the txID matches the transaction body, and that the body contains the expected recipient, amount and contract.
+- Public endpoints: mempool.space (BTC), api.mainnet-beta.solana.com (SOL), TronGrid (TRX, about 3 requests/second; retries automatically when rate-limited). For heavy use, apply for an API key.
+
 ## Security design
 
 | Item | Approach |

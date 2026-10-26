@@ -11,8 +11,8 @@ import { colors } from '@/theme';
 export default function Activity() {
   const { t, address, networkKey, network } = useWallet();
   const [records, setRecords] = useState<TransactionRecord[]>([]);
-  const explorer = (network?.blockExplorer || '').replace(/\/$/, '');
-  const symbol = network?.currencySymbol || 'ETH';
+  const txUrl = network?.txUrl;
+  const symbol = network?.symbol || 'ETH';
 
   useFocusEffect(
     useCallback(() => {
@@ -49,7 +49,7 @@ export default function Activity() {
               title={`${t('send')} → ${shortAddress(r.to)}`}
               subtitle={ok ? t('success') : t('failed')}
               right={<Text style={styles.value}>-{value}</Text>}
-              onPress={explorer ? () => Linking.openURL(`${explorer}/tx/${r.hash}`) : undefined}
+              onPress={txUrl ? () => Linking.openURL(txUrl(r.hash)) : undefined}
             />
           );
         })}

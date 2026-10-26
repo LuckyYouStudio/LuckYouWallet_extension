@@ -1,33 +1,47 @@
 import React from 'react';
 import { router } from 'expo-router';
-import { Avatar, Icon, ListItem, Screen } from '@/components/ui';
+import { AppNetwork } from '@/chains';
+import { Avatar, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
 import { colors } from '@/theme';
 
-// 移动端隐藏本地开发网络
-const HIDDEN = new Set(['hardhat', 'localhost']);
+// 各链的代表色，用于网络头像
+const FAMILY_COLORS: Record<string, string> = {
+  bitcoin: '#f7931a',
+  solana: '#9945ff',
+  tron: '#eb0029',
+};
 
 export default function Networks() {
-  const { networks, networkKey, switchNetwork } = useWallet();
+  const { t, networks, networkKey, switchNetwork } = useWallet();
+  const all = Object.values(networks);
+  const groups: { title: string; items: AppNetwork[] }[] = [
+    { title: t('mainnets'), items: all.filter((n) => n.family === 'evm' && !n.isTestnet) },
+    { title: t('otherChains'), items: all.filter((n) => n.family !== 'evm' && !n.isTestnet) },
+    { title: t('testnets'), items: all.filter((n) => n.isTestnet) },
+  ];
 
   return (
     <Screen>
-      {Object.entries(networks)
-        .filter(([key]) => !HIDDEN.has(key) || key === networkKey)
-        .map(([key, net]) => (
-          <ListItem
-            key={key}
-            selected={key === networkKey}
-            left={<Avatar label={net.name} seed={key} size={36} />}
-            title={net.name}
-            subtitle={`Chain ID ${net.chainId} · ${net.currencySymbol}`}
-            right={key === networkKey ? <Icon name="checkmark.circle.fill" size={22} color={colors.primary} /> : null}
-            onPress={async () => {
-              await switchNetwork(key);
-              router.back();
-            }}
-          />
-        ))}
+      {groups.map((group) => (
+        <React.Fragment key={group.title}>
+          <SectionTitle title={group.title} />
+          {group.items.map((net) => (
+            <ListItem
+              key={net.key}
+              selected={net.key === networkKey}
+              left={<Avatar label={net.name} seed={net.key} size={36} color={FAMILY_COLORS[net.family]} />}
+              title={net.name}
+              subtitle={net.symbol}
+              right={net.key === networkKey ? <Icon name="checkmark.circle.fill" size={22} color={colors.primary} /> : null}
+              onPress={async () => {
+                await switchNetwork(net.key);
+                router.back();
+              }}
+            />
+          ))}
+        </React.Fragment>
+      ))}
     </Screen>
   );
 }
