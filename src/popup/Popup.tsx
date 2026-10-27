@@ -51,7 +51,8 @@ import { formatUsd, getUsdPrices, UsdPrices, usdValue } from '../core/prices';
 import { FeeChoice, FeeEditor, feeLabel } from './FeeEditor';
 import { formatEther } from 'ethers';
 import Activity from './Activity';
-import { Icon, PageHeader, shortAddress, avatarColor, formatAmount } from './ui';
+import { Icon, PageHeader, shortAddress, formatAmount, CoinLogo } from './ui';
+import { nativeLogo, networkLogo, tokenLogo } from '../core/logos';
 import './theme.css';
 import NetworkManager from './NetworkManager';
 import { translations, Lang, TranslationKey } from '../core/i18n';
@@ -1466,7 +1467,7 @@ const Popup: React.FC = () => {
             <div className="brand-mark">L</div>
           </div>
           <div className="network-pill" title={currentNetwork?.name}>
-            <span className="dot" />
+            {networkLogo(network) ? <img className="net-logo" src={`/logos/${networkLogo(network)}.png`} alt="" /> : <span className="dot" />}
             <span className="label">{currentNetwork?.name || '—'}</span>
             <Icon name="chevron" size={14} className="chevron" />
             <select value={network} onChange={handleNetworkChange} aria-label={t('networks')}>
@@ -1727,7 +1728,11 @@ const Popup: React.FC = () => {
           </div>
           <div className="list">
             <div className="list-item" style={{ cursor: 'default' }}>
-              <div className="avatar native">{nativeSymbol.slice(0, 1)}</div>
+              {nativeLogo(network) ? (
+                <CoinLogo logo={nativeLogo(network)} label={nativeSymbol} />
+              ) : (
+                <div className="avatar native">{nativeSymbol.slice(0, 1)}</div>
+              )}
               <div className="main">
                 <div className="title">{nativeSymbol}</div>
                 <div className="sub">{currentNetwork?.name}</div>
@@ -1746,9 +1751,7 @@ const Popup: React.FC = () => {
                   setView('tokenDetail');
                 }}
               >
-                <div className="avatar" style={{ background: avatarColor(token.address) }}>
-                  {token.symbol.slice(0, 1).toUpperCase()}
-                </div>
+                <CoinLogo logo={tokenLogo(token.address, token.symbol)} label={token.symbol} seed={token.address} />
                 <div className="main">
                   <div className="title">{token.symbol}</div>
                   <div className="sub">{token.name}</div>
@@ -1814,7 +1817,7 @@ const Popup: React.FC = () => {
           {tokenMetaError && <span className="text-danger">{tokenMetaError}</span>}
           {preview ? (
             <div className="list-item" style={{ cursor: 'default' }}>
-              <div className="avatar" style={{ background: avatarColor(preview.address) }}>{preview.symbol.slice(0, 1)}</div>
+              <CoinLogo logo={tokenLogo(preview.address, preview.symbol)} label={preview.symbol} seed={preview.address} />
               <div className="main">
                 <div className="title">{preview.symbol}</div>
                 <div className="sub">{preview.name}</div>
@@ -1842,9 +1845,14 @@ const Popup: React.FC = () => {
         <div className="page">
           <PageHeader title={selectedToken.symbol} onBack={() => setView('wallet')} />
           <div className="card center">
-            <div className="avatar receive-avatar" style={{ background: avatarColor(selectedToken.address), margin: '0 auto 10px' }}>
-              {selectedToken.symbol.slice(0, 1).toUpperCase()}
-            </div>
+            <CoinLogo
+              logo={tokenLogo(selectedToken.address, selectedToken.symbol)}
+              label={selectedToken.symbol}
+              seed={selectedToken.address}
+              size={56}
+              className="receive-avatar"
+              style={{ margin: '0 auto 10px' }}
+            />
             <div className="balance-amount" style={{ fontSize: 26 }}>
               {formatAmount(tokenBalances[selectedToken.address] || '0')}
               <span className="sym" style={{ fontSize: 14 }}>{selectedToken.symbol}</span>

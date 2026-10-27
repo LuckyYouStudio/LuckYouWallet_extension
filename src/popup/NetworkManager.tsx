@@ -13,6 +13,8 @@ import {
 } from '../core/wallet';
 import { translations, Lang, TranslationKey } from '../core/i18n';
 import './NetworkManager.css';
+import { CoinLogo } from './ui';
+import { networkLogo } from '../core/logos';
 
 interface NetworkManagerProps {
   onNetworkChange: (network: NetworkKey) => void;
@@ -356,6 +358,7 @@ const NetworkManager: React.FC<NetworkManagerProps> = ({
               </div>
             ) : (
               <>
+                <CoinLogo logo={networkLogo(key)} label={network.name} seed={key} size={32} />
                 <div className="network-info">
                   <div className="network-name">
                     {network.name}

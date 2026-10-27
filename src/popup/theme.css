@@ -90,6 +90,7 @@ html, body {
 .network-pill select {
   position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%;
 }
+.network-pill .net-logo { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; }
 .network-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; box-shadow: 0 0 6px var(--success); }
 .network-pill .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .network-pill .chevron { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
@@ -278,6 +279,7 @@ html, body {
   font-weight: 700; font-size: 13px; color: #fff;
 }
 .avatar.native { background: var(--gradient); }
+.avatar.logo { object-fit: cover; background: var(--surface-hover); }
 .avatar.sent { background: var(--danger-soft); color: var(--danger); }
 .avatar.received { background: var(--success-soft); color: var(--success); }
 

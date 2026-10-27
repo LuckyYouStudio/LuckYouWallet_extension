@@ -2,8 +2,10 @@ import React from 'react';
 import { Alert } from 'react-native';
 import { router } from 'expo-router';
 import { AppNetwork } from '@/chains';
-import { Avatar, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
+import { Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
+import { CoinLogo } from '@/components/CoinLogo';
 import { useWallet } from '@/state/WalletContext';
+import { networkLogo } from '@core/logos';
 import { errorMessage } from '@/lib/format';
 import { colors } from '@/theme';
 
@@ -32,7 +34,7 @@ export default function Networks() {
             <ListItem
               key={net.key}
               selected={net.key === networkKey}
-              left={<Avatar label={net.name} seed={net.key} size={36} color={FAMILY_COLORS[net.family]} />}
+              left={<CoinLogo logo={networkLogo(net.key)} label={net.name} seed={net.key} size={36} color={FAMILY_COLORS[net.family]} />}
               title={net.name}
               subtitle={net.symbol}
               right={net.key === networkKey ? <Icon name="checkmark.circle.fill" size={22} color={colors.primary} /> : null}

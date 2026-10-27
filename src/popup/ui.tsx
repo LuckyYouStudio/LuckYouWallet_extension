@@ -70,3 +70,20 @@ export const PageHeader: React.FC<{ title: string; onBack?: () => void; right?: 
     {right}
   </div>
 );
+
+/** 链 / 代币图标 (随插件打包在 /logos)；没有图标时退回字母头像 */
+export const CoinLogo: React.FC<{
+  logo: string | null;
+  label: string;
+  seed?: string;
+  size?: number;
+  className?: string;
+  style?: React.CSSProperties;
+}> = ({ logo, label, seed, size = 36, className = '', style }) =>
+  logo ? (
+    <img className={`avatar logo ${className}`} src={`/logos/${logo}.png`} alt="" width={size} height={size} style={{ width: size, height: size, ...style }} />
+  ) : (
+    <div className={`avatar ${className}`} style={{ width: size, height: size, background: avatarColor(seed || label), ...style }}>
+      {label.slice(0, 1).toUpperCase()}
+    </div>
+  );

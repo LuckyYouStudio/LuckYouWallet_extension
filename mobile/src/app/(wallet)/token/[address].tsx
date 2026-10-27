@@ -2,8 +2,10 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import { Avatar, Button, Card, KeyValue, Screen } from '@/components/ui';
+import { Button, Card, KeyValue, Screen } from '@/components/ui';
+import { CoinLogo } from '@/components/CoinLogo';
 import { useWallet } from '@/state/WalletContext';
+import { tokenLogo } from '@core/logos';
 import { formatAmount, formatUsd, shortAddress, usdValue } from '@/lib/format';
 import { colors } from '@/theme';
 
@@ -17,7 +19,7 @@ export default function TokenDetail() {
     <Screen>
       <Stack.Screen options={{ title: token.symbol }} />
       <View style={styles.hero}>
-        <Avatar label={token.symbol} seed={token.address} size={68} />
+        <CoinLogo logo={tokenLogo(token.address, token.symbol)} label={token.symbol} seed={token.address} size={68} />
         <Text style={styles.amount}>
           {formatAmount(tokenBalances[token.address] || '0')} <Text style={styles.symbol}>{token.symbol}</Text>
         </Text>

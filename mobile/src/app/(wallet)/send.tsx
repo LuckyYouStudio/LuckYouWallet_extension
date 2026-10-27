@@ -2,14 +2,16 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import { Avatar, Button, Field, ListItem, Screen } from '@/components/ui';
+import { Button, Field, ListItem, Screen } from '@/components/ui';
+import { CoinLogo } from '@/components/CoinLogo';
 import { useWallet } from '@/state/WalletContext';
+import { nativeLogo, tokenLogo } from '@core/logos';
 import { formatAmount, formatUsd, usdValue } from '@/lib/format';
 import { colors } from '@/theme';
 
 export default function Send() {
   const { token: tokenAddress } = useLocalSearchParams<{ token?: string }>();
-  const { t, network, adapter, balance, tokens, tokenBalances, prices } = useWallet();
+  const { t, network, networkKey, adapter, balance, tokens, tokenBalances, prices } = useWallet();
   const token = useMemo(() => tokens.find((x) => x.address === tokenAddress), [tokens, tokenAddress]);
   const symbol = token ? token.symbol : network?.symbol || 'ETH';
   const isValidAddress = (a: string) => !!adapter?.isValidAddress(a);
@@ -37,7 +39,7 @@ export default function Send() {
       }
     >
       <ListItem
-        left={<Avatar label={symbol} seed={token?.address || symbol} />}
+        left={<CoinLogo logo={token ? tokenLogo(token.address, token.symbol) : nativeLogo(networkKey)} label={symbol} seed={token?.address || symbol} />}
         title={symbol}
         subtitle={`${t('available')}: ${formatAmount(available)}`}
       />

@@ -3,8 +3,10 @@ import { ActivityIndicator, Text } from 'react-native';
 import { router } from 'expo-router';
 import { isAddress } from 'ethers';
 import { getTokenInfo, TokenInfo } from '@core/wallet';
-import { Avatar, Button, Field, ListItem, Screen } from '@/components/ui';
+import { Button, Field, ListItem, Screen } from '@/components/ui';
+import { CoinLogo } from '@/components/CoinLogo';
 import { useWallet } from '@/state/WalletContext';
+import { tokenLogo } from '@core/logos';
 import { errorMessage } from '@/lib/format';
 import { colors } from '@/theme';
 
@@ -64,7 +66,7 @@ export default function AddToken() {
       {loading && <ActivityIndicator color={colors.textSecondary} />}
       {preview && (
         <ListItem
-          left={<Avatar label={preview.symbol} seed={preview.address} />}
+          left={<CoinLogo logo={tokenLogo(preview.address, preview.symbol)} label={preview.symbol} seed={preview.address} />}
           title={preview.symbol}
           subtitle={preview.name}
           right={<Text style={{ color: colors.textMuted }}>{t('decimals')} {preview.decimals}</Text>}

@@ -5,8 +5,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { SymbolViewProps } from 'expo-symbols';
-import { Alert, Avatar, Button, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
+import { Alert, Button, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
+import { CoinLogo } from '@/components/CoinLogo';
 import { useWallet } from '@/state/WalletContext';
+import { nativeLogo, networkLogo, tokenLogo } from '@core/logos';
 import { formatAmount, formatUsd, shortAddress, usdValue } from '@/lib/format';
 import { colors, gradient } from '@/theme';
 
@@ -24,7 +26,7 @@ const Action: React.FC<{ icon: SymbolViewProps['name']; label: string; onPress: 
 );
 
 export default function Home() {
-  const { t, address, unsupported, network, balance, tokens, tokenBalances, prices, refreshing, refresh, incoming, clearIncoming } = useWallet();
+  const { t, address, unsupported, network, networkKey, balance, tokens, tokenBalances, prices, refreshing, refresh, incoming, clearIncoming } = useWallet();
   const symbol = network?.symbol || 'ETH';
   const isEvm = network?.family === 'evm';
   const [copied, setCopied] = React.useState(false);
@@ -61,7 +63,7 @@ export default function Home() {
     <Screen edges={['top']} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.textSecondary} />}>
       <View style={styles.topBar}>
         <Pressable style={styles.networkPill} onPress={() => router.push('/networks')}>
-          <View style={styles.dot} />
+          {networkLogo(networkKey) ? <CoinLogo logo={networkLogo(networkKey)} label={network?.name || ''} size={18} /> : <View style={styles.dot} />}
           <Text style={styles.networkText} numberOfLines={1}>{network?.name}</Text>
           <Icon name="chevron.down" size={11} color={colors.textMuted} />
         </Pressable>
@@ -109,7 +111,13 @@ export default function Home() {
         <SectionTitle title={t('assets')} />
         <View style={{ gap: 8 }}>
           <ListItem
-            left={<LinearGradient colors={gradient} style={styles.nativeAvatar}><Text style={styles.nativeAvatarText}>{symbol[0]}</Text></LinearGradient>}
+            left={
+              nativeLogo(networkKey) ? (
+                <CoinLogo logo={nativeLogo(networkKey)} label={symbol} />
+              ) : (
+                <LinearGradient colors={gradient} style={styles.nativeAvatar}><Text style={styles.nativeAvatarText}>{symbol[0]}</Text></LinearGradient>
+              )
+            }
             title={symbol}
             subtitle={network?.name}
             right={amountWithUsd(balance == null ? '—' : formatAmount(balance), nativeUsd)}
@@ -118,7 +126,7 @@ export default function Home() {
           {tokens.map((token) => (
             <ListItem
               key={token.address}
-              left={<Avatar label={token.symbol} seed={token.address} />}
+              left={<CoinLogo logo={tokenLogo(token.address, token.symbol)} label={token.symbol} seed={token.address} />}
               title={token.symbol}
               subtitle={token.name}
               right={amountWithUsd(formatAmount(tokenBalances[token.address] || '0'), tokenUsd(token.address))}
