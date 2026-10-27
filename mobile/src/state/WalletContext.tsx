@@ -10,7 +10,8 @@ import {
   getTokenBalance,
   TokenInfo,
 } from '@core/wallet';
-import { accountFor, AppNetwork, buildNetworks, ChainAccount, ChainAdapter, deriveChainAccounts, FeeQuote, getAdapter } from '@/chains';
+import { getUsdPrices, UsdPrices } from '@core/prices';
+import { accountFor, AppNetwork, buildNetworks, ChainAccount, ChainAdapter, deriveChainAccounts, FeeQuote, FeeSettings, getAdapter } from '@/chains';
 import { appendHistory, clearAll, kv, loadTokens, saveTokens } from '@/lib/storage';
 import * as vault from '@/lib/vault';
 import { detectLang, Lang, StringKey, strings } from '@/lib/i18n';
@@ -56,15 +57,19 @@ interface WalletContextValue {
   balance: string | null;
   tokens: TokenInfo[];
   tokenBalances: Record<string, string>;
+  /** 美元价格 (仅主网)；查不到时为 null / 缺省 */
+  prices: UsdPrices;
   refreshing: boolean;
   refresh: () => Promise<void>;
   addToken: (token: TokenInfo) => Promise<void>;
 
-  estimateFee: (to: string, amount: string, token?: TokenInfo) => Promise<FeeQuote>;
-  send: (to: string, amount: string, token?: TokenInfo) => Promise<{ hash: string; status: number }>;
+  estimateFee: (to: string, amount: string, token?: TokenInfo, settings?: FeeSettings) => Promise<FeeQuote>;
+  send: (to: string, amount: string, token?: TokenInfo, settings?: FeeSettings) => Promise<{ hash: string; status: number }>;
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
+
+const NO_PRICES: UsdPrices = { native: null, tokens: {} };
 
 /** 助记词钱包补齐比特币 / Solana / Tron 账户 */
 function withChains(secret: vault.WalletSecret): vault.WalletSecret {
@@ -84,6 +89,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [balance, setBalance] = useState<string | null>(null);
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [tokenBalances, setTokenBalances] = useState<Record<string, string>>({});
+  const [prices, setPrices] = useState<UsdPrices>(NO_PRICES);
   const [refreshing, setRefreshing] = useState(false);
   const backgroundedAt = useRef<number | null>(null);
 
@@ -230,6 +236,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setBalance(null);
     setTokens([]);
     setTokenBalances({});
+    setPrices(NO_PRICES);
     setBiometricsEnabled(false);
     setStatus('onboarding');
   }, []);
@@ -257,13 +264,15 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       list.push(token);
       balances[token.address] = r.status === 'fulfilled' ? r.value : '0';
     });
-    return { list, native, balances };
+    const usd = await getUsdPrices(networkKey, list.map((x) => x.address));
+    return { list, native, balances, usd };
   }, [adapter, address, network, networkKey]);
 
   const applyBalances = useCallback((r: Awaited<ReturnType<typeof fetchBalances>>) => {
     setTokens(r.list);
     setBalance(r.native);
     setTokenBalances(r.balances);
+    setPrices(r.usd);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -291,6 +300,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setBalance(null);
     setTokens([]);
     setTokenBalances({});
+    setPrices(NO_PRICES);
     setNetworkKey(key);
   }, []);
 
@@ -305,17 +315,17 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 
   const estimateFee = useCallback(
-    async (to: string, amount: string, token?: TokenInfo) => {
+    async (to: string, amount: string, token?: TokenInfo, settings?: FeeSettings) => {
       if (!adapter) throw new Error('Network not ready');
-      return adapter.estimateFee(address, to, amount, token);
+      return adapter.estimateFee(address, to, amount, token, settings);
     },
     [adapter, address],
   );
 
   const send = useCallback(
-    async (to: string, amount: string, token?: TokenInfo) => {
+    async (to: string, amount: string, token?: TokenInfo, settings?: FeeSettings) => {
       if (!account || !adapter) throw new Error('Wallet locked');
-      const result = await adapter.send(account, to, amount, token);
+      const result = await adapter.send(account, to, amount, token, settings);
       await appendHistory(address, networkKey, {
         hash: result.hash,
         from: address,
@@ -335,13 +345,13 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       draft, startCreate, startImport, finishSetup,
       unlock, unlockWithBiometrics, biometricsEnabled, biometricsAvailable, setBiometrics, lock, reset, getSecret,
       address, unsupported, networkKey, network, networks, switchNetwork, adapter,
-      balance, tokens, tokenBalances, refreshing, refresh, addToken,
+      balance, tokens, tokenBalances, prices, refreshing, refresh, addToken,
       estimateFee, send,
     }),
     [
       status, retryBoot, lang, t, setLang, draft, startCreate, startImport, finishSetup, unlock, unlockWithBiometrics,
       biometricsEnabled, biometricsAvailable, setBiometrics, lock, reset, getSecret, address, unsupported, networkKey,
-      network, networks, switchNetwork, adapter, balance, tokens, tokenBalances, refreshing, refresh, addToken,
+      network, networks, switchNetwork, adapter, balance, tokens, tokenBalances, prices, refreshing, refresh, addToken,
       estimateFee, send,
     ],
   );

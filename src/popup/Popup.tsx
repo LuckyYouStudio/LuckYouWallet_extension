@@ -40,12 +40,14 @@ import {
   getTokenBalance,
   detectTokens,
   isTokenContract,
-  GasEstimate,
   getCurrentNetwork,
   setCurrentNetwork,
   getAllNetworks,
 
 } from '../core/wallet';
+import { estimateTransferGasLimit, evmFeeCost, EvmFeeSuggestion, EvmGasSettings, suggestEvmFees } from '../core/fees';
+import { formatUsd, getUsdPrices, UsdPrices, usdValue } from '../core/prices';
+import { FeeChoice, FeeEditor, feeLabel } from './FeeEditor';
 import { formatEther } from 'ethers';
 import Activity from './Activity';
 import { Icon, PageHeader, shortAddress, avatarColor, formatAmount } from './ui';
@@ -191,7 +193,12 @@ const Popup: React.FC = () => {
   const [sendTokenTo, setSendTokenTo] = useState('');
   const [sendTokenAmount, setSendTokenAmount] = useState('');
   const [sendingToken, setSendingToken] = useState(false);
-  const [gasEstimate, setGasEstimate] = useState<GasEstimate | null>(null);
+  /** 默认费用档位与当前选中的 gas 参数 */
+  const [feeSuggestion, setFeeSuggestion] = useState<EvmFeeSuggestion | null>(null);
+  const [feeChoice, setFeeChoice] = useState<{ level: FeeChoice; gas: EvmGasSettings } | null>(null);
+  const [feeEditorOpen, setFeeEditorOpen] = useState(false);
+  /** 美元价格，记录所属网络，切换网络后旧价格不再使用 */
+  const [prices, setPrices] = useState<UsdPrices & { network: string }>({ network: '', native: null, tokens: {} });
   const [gasEstimating, setGasEstimating] = useState(false);
   const [pendingTransaction, setPendingTransaction] = useState<{
     type: 'eth' | 'token';
@@ -376,6 +383,18 @@ const Popup: React.FC = () => {
     };
     loadTokens();
   }, [walletInfo, network]);
+
+  // 美元价格：网络或代币列表变化时刷新 (核心里有 60 秒缓存)
+  useEffect(() => {
+    if (!walletInfo?.address) return;
+    let cancelled = false;
+    getUsdPrices(network, tokens.map((x) => x.address)).then((p) => {
+      if (!cancelled) setPrices({ ...p, network });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [walletInfo?.address, network, tokens]);
 
   useEffect(() => {
     if (!walletInfo) return;
@@ -800,6 +819,20 @@ const Popup: React.FC = () => {
     setView('wallet');
   };
 
+  /** 估算 gas 上限并按最近区块给出 低 / 市场 / 激进 三档，默认选市场档 */
+  const loadFeeSuggestion = async (to: string, value: string, token?: TokenInfo) => {
+    const gasLimit = await estimateTransferGasLimit(walletInfo!.address, to, value, network, token);
+    const suggestion = await suggestEvmFees(network, gasLimit);
+    setFeeSuggestion(suggestion);
+    setFeeChoice({ level: 'market', gas: suggestion.levels.market });
+  };
+
+  const resetFee = () => {
+    setFeeSuggestion(null);
+    setFeeChoice(null);
+    setFeeEditorOpen(false);
+  };
+
   const handleSend = async () => {
     if (!walletInfo) return;
     
@@ -813,9 +846,7 @@ const Popup: React.FC = () => {
     // 预估 Gas 费用
     setGasEstimating(true);
     try {
-      const { estimateGasForEth } = await import('../core/wallet');
-      const estimate = await estimateGasForEth(walletInfo.address, toAddress, amount, network);
-      setGasEstimate(estimate);
+      await loadFeeSuggestion(toAddress, amount);
       setView('confirmEthTransaction');
     } catch (e) {
       alert('Failed to estimate gas');
@@ -826,7 +857,7 @@ const Popup: React.FC = () => {
   };
 
   const handleConfirmEthTransaction = async () => {
-    if (!walletInfo || !pendingTransaction || !gasEstimate) return;
+    if (!walletInfo || !pendingTransaction || !feeChoice) return;
     
     try {
       setSending(true);
@@ -834,10 +865,10 @@ const Popup: React.FC = () => {
       
       if (walletInfo.privateKey) {
         // 私钥导入的钱包
-        result = await sendEthWithPrivateKey(walletInfo.privateKey, pendingTransaction.to, pendingTransaction.amount, network);
+        result = await sendEthWithPrivateKey(walletInfo.privateKey, pendingTransaction.to, pendingTransaction.amount, network, feeChoice.gas);
       } else if (walletInfo.mnemonic) {
         // 助记词导入的钱包
-        result = await sendEth(walletInfo.mnemonic, pendingTransaction.to, pendingTransaction.amount, network);
+        result = await sendEth(walletInfo.mnemonic, pendingTransaction.to, pendingTransaction.amount, network, feeChoice.gas);
       } else {
         throw new Error('No wallet credentials available');
       }
@@ -872,7 +903,7 @@ const Popup: React.FC = () => {
       setToAddress('');
       setAmount('');
       setPendingTransaction(null);
-      setGasEstimate(null);
+      resetFee();
       setView('wallet');
     } catch (e) {
       alert('Failed to send transaction');
@@ -882,18 +913,16 @@ const Popup: React.FC = () => {
   };
 
   const handleConfirmTokenTransaction = async () => {
-    if (!walletInfo || !pendingTransaction || !gasEstimate || !pendingTransaction.token) return;
+    if (!walletInfo || !pendingTransaction || !feeChoice || !pendingTransaction.token) return;
     
     try {
       setSendingToken(true);
-      const { sendToken } = await import('../core/wallet');
-      const { hash, status } = await sendToken(
-        walletInfo.mnemonic,
-        pendingTransaction.token,
-        pendingTransaction.to,
-        pendingTransaction.amount,
-        network,
-      );
+      const { sendToken, sendTokenWithPrivateKey } = await import('../core/wallet');
+      const { token, to, amount: value } = pendingTransaction;
+      // 私钥导入的钱包没有助记词，按私钥签名
+      const { hash, status } = walletInfo.privateKey
+        ? await sendTokenWithPrivateKey(walletInfo.privateKey, token, to, value, network, feeChoice.gas)
+        : await sendToken(walletInfo.mnemonic, token, to, value, network, feeChoice.gas);
       const success = Number(status) === 1;
       alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
       
@@ -902,7 +931,7 @@ const Popup: React.FC = () => {
       setTokenBalances((prev) => ({ ...prev, [pendingTransaction.token!.address]: parseFloat(b).toFixed(5) }));
       
       setPendingTransaction(null);
-      setGasEstimate(null);
+      resetFee();
       setView('tokenDetail');
     } catch (e) {
       alert('Failed to send token');
@@ -1292,9 +1321,7 @@ const Popup: React.FC = () => {
     });
     setGasEstimating(true);
     try {
-      const { estimateGasForToken } = await import('../core/wallet');
-      const estimate = await estimateGasForToken(walletInfo.address, selectedToken, sendTokenTo, sendTokenAmount, network);
-      setGasEstimate(estimate);
+      await loadFeeSuggestion(sendTokenTo, sendTokenAmount, selectedToken);
       setView('confirmTokenTransaction');
     } catch (e) {
       alert('Failed to estimate gas');
@@ -1316,16 +1343,65 @@ const Popup: React.FC = () => {
   const showHeader = !['home', 'import', 'setPassword', 'unlock'].includes(view);
   const mnemonicWords = walletInfo?.mnemonic ? walletInfo.mnemonic.trim().split(/\s+/) : [];
 
-  const renderGasCard = () =>
-    gasEstimate && (
+  const nativePrice = prices.network === network ? prices.native : null;
+  const tokenPrice = (address: string) => (prices.network === network ? prices.tokens[address] : undefined);
+
+  /** 网络费：点击打开编辑面板；原生币转账同时显示合计 */
+  const renderFeeCard = (nativeAmount?: string) => {
+    if (!feeSuggestion || !feeChoice) return null;
+    const fee = formatEther(evmFeeCost(feeChoice.gas, feeSuggestion.baseFee).expected);
+    const feeUsd = formatUsd(usdValue(fee, nativePrice));
+    const total = nativeAmount ? String(Number(nativeAmount) + Number(fee)) : '';
+    const totalUsd = total ? formatUsd(usdValue(total, nativePrice)) : '';
+    return (
       <div className="card">
-        <p className="card-title">{t('gasEstimate')}</p>
-        <div className="kv"><span className="k">{t('gasLimit')}</span><span className="v mono">{gasEstimate.gasLimit}</span></div>
-        <div className="kv"><span className="k">{t('maxFeePerGas')}</span><span className="v mono">{gasEstimate.maxFeePerGas}</span></div>
-        <div className="kv"><span className="k">{t('maxPriorityFeePerGas')}</span><span className="v mono">{gasEstimate.maxPriorityFeePerGas}</span></div>
-        <div className="kv total"><span className="k">{t('totalCost')}</span><span className="v">{gasEstimate.totalCost} {nativeSymbol}</span></div>
+        <button className="fee-row" onClick={() => setFeeEditorOpen(true)}>
+          <span>
+            <span className="k">{tr('Est. network fee', '预估网络费')}</span>
+            <span className="fee-level">
+              {feeLabel(feeChoice.level, lang)} <Icon name="chevron" size={13} />
+            </span>
+          </span>
+          <span className="fee-values">
+            <span className="fee-main">{feeUsd || `${formatAmount(fee, 8)} ${nativeSymbol}`}</span>
+            {feeUsd && <span className="fee-sub">{formatAmount(fee, 8)} {nativeSymbol}</span>}
+          </span>
+        </button>
+        {total && (
+          <div className="kv total">
+            <span className="k">{tr('Total', '合计')}</span>
+            <span className="v">{formatAmount(total, 8)} {nativeSymbol}{totalUsd ? `  ≈ ${totalUsd}` : ''}</span>
+          </div>
+        )}
+        {feeEditorOpen && (
+          <FeeEditor
+            suggestion={feeSuggestion}
+            selected={feeChoice.level}
+            current={feeChoice.gas}
+            symbol={nativeSymbol}
+            price={nativePrice}
+            lang={lang}
+            onSelect={(level, gas) => {
+              setFeeChoice({ level, gas });
+              setFeeEditorOpen(false);
+            }}
+            onClose={() => setFeeEditorOpen(false)}
+          />
+        )}
       </div>
     );
+  };
+
+  const usdHint = (value: string, price: number | null | undefined) => {
+    const usd = Number(value) > 0 ? formatUsd(usdValue(value, price)) : '';
+    return usd ? <div className="usd-hint">≈ {usd}</div> : null;
+  };
+
+  const nativeUsd = balanceLoaded ? usdValue(balance, nativePrice) : null;
+  const tokenUsd = (address: string) => usdValue(tokenBalances[address] || '0', tokenPrice(address));
+  // 总价值 = 原生币 + 有报价的代币；没有任何报价时不显示
+  const pricedValues = [nativeUsd, ...tokens.map((x) => tokenUsd(x.address))].filter((v): v is number => v != null);
+  const totalUsd = pricedValues.length ? pricedValues.reduce((a, b) => a + b, 0) : null;
 
   return (
     <div className="app">
@@ -1569,6 +1645,7 @@ const Popup: React.FC = () => {
               {balanceLoaded ? formatAmount(balance) : balanceLoading ? '···' : '—'}
               <span className="sym">{nativeSymbol}</span>
             </div>
+            {totalUsd != null && <div className="balance-usd">{tr('Total value', '总价值')} {formatUsd(totalUsd)}</div>}
           </div>
 
           <div className="actions">
@@ -1600,7 +1677,10 @@ const Popup: React.FC = () => {
                 <div className="title">{nativeSymbol}</div>
                 <div className="sub">{currentNetwork?.name}</div>
               </div>
-              <div className="end">{balanceLoaded ? formatAmount(balance) : '—'}</div>
+              <div className="end">
+                {balanceLoaded ? formatAmount(balance) : '—'}
+                {nativeUsd != null && <div className="sub">{formatUsd(nativeUsd)}</div>}
+              </div>
             </div>
             {tokens.map((token) => (
               <button
@@ -1618,7 +1698,10 @@ const Popup: React.FC = () => {
                   <div className="title">{token.symbol}</div>
                   <div className="sub">{token.name}</div>
                 </div>
-                <div className="end">{formatAmount(tokenBalances[token.address] || '0')}</div>
+                <div className="end">
+                  {formatAmount(tokenBalances[token.address] || '0')}
+                  {tokenUsd(token.address) != null && <div className="sub">{formatUsd(tokenUsd(token.address))}</div>}
+                </div>
               </button>
             ))}
           </div>
@@ -1656,6 +1739,7 @@ const Popup: React.FC = () => {
             </label>
             <input className="input" placeholder="0.0" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
           </div>
+          {usdHint(amount, nativePrice)}
           <div className="spacer" />
           <button className="btn btn-primary" onClick={handleSend} disabled={sending || gasEstimating || !toAddress || !amount}>
             {gasEstimating && <span className="spinner" />}
@@ -1710,6 +1794,7 @@ const Popup: React.FC = () => {
               {formatAmount(tokenBalances[selectedToken.address] || '0')}
               <span className="sym" style={{ fontSize: 14 }}>{selectedToken.symbol}</span>
             </div>
+            {usdHint(tokenBalances[selectedToken.address] || '0', tokenPrice(selectedToken.address))}
             <div className="text-muted" style={{ fontSize: 12 }}>{selectedToken.name}</div>
           </div>
           <div className="row">
@@ -1771,6 +1856,7 @@ const Popup: React.FC = () => {
             </label>
             <input className="input" placeholder="0.0" inputMode="decimal" value={sendTokenAmount} onChange={(e) => setSendTokenAmount(e.target.value)} />
           </div>
+          {usdHint(sendTokenAmount, tokenPrice(selectedToken.address))}
           <div className="spacer" />
           <button className="btn btn-primary" onClick={handleSendTokenNext} disabled={sendingToken || gasEstimating || !sendTokenTo || !sendTokenAmount}>
             {gasEstimating && <span className="spinner" />}
@@ -1797,7 +1883,7 @@ const Popup: React.FC = () => {
         </div>
       )}
 
-      {view === 'confirmEthTransaction' && pendingTransaction && gasEstimate && (
+      {view === 'confirmEthTransaction' && pendingTransaction && feeChoice && (
         <div className="page">
           <PageHeader title={t('confirmTransaction')} />
           <div className="card center">
@@ -1805,20 +1891,21 @@ const Popup: React.FC = () => {
             <div className="balance-amount" style={{ fontSize: 28 }}>
               {pendingTransaction.amount}<span className="sym" style={{ fontSize: 14 }}>{nativeSymbol}</span>
             </div>
+            {usdHint(pendingTransaction.amount, nativePrice)}
           </div>
           <div className="card">
             <div className="kv"><span className="k">{t('from')}</span><span className="v mono">{shortAddress(walletInfo?.address)}</span></div>
             <div className="kv"><span className="k">{t('to')}</span><span className="v mono">{pendingTransaction.to}</span></div>
             <div className="kv"><span className="k">{t('network')}</span><span className="v">{currentNetwork?.name}</span></div>
           </div>
-          {renderGasCard()}
+          {renderFeeCard(pendingTransaction.amount)}
           <div className="footer-actions">
             <button
               className="btn btn-secondary"
               onClick={() => {
                 setView('send');
                 setPendingTransaction(null);
-                setGasEstimate(null);
+                resetFee();
               }}
             >
               {t('reject')}
@@ -1831,7 +1918,7 @@ const Popup: React.FC = () => {
         </div>
       )}
 
-      {view === 'confirmTokenTransaction' && pendingTransaction && gasEstimate && pendingTransaction.token && (
+      {view === 'confirmTokenTransaction' && pendingTransaction && feeChoice && pendingTransaction.token && (
         <div className="page">
           <PageHeader title={t('confirmTransaction')} />
           <div className="card center">
@@ -1839,6 +1926,7 @@ const Popup: React.FC = () => {
             <div className="balance-amount" style={{ fontSize: 28 }}>
               {pendingTransaction.amount}<span className="sym" style={{ fontSize: 14 }}>{pendingTransaction.token.symbol}</span>
             </div>
+            {usdHint(pendingTransaction.amount, tokenPrice(pendingTransaction.token.address))}
             <div className="text-muted" style={{ fontSize: 12 }}>{pendingTransaction.token.name}</div>
           </div>
           <div className="card">
@@ -1846,14 +1934,14 @@ const Popup: React.FC = () => {
             <div className="kv"><span className="k">{t('to')}</span><span className="v mono">{pendingTransaction.to}</span></div>
             <div className="kv"><span className="k">{t('network')}</span><span className="v">{currentNetwork?.name}</span></div>
           </div>
-          {renderGasCard()}
+          {renderFeeCard()}
           <div className="footer-actions">
             <button
               className="btn btn-secondary"
               onClick={() => {
                 setView('sendToken');
                 setPendingTransaction(null);
-                setGasEstimate(null);
+                resetFee();
               }}
             >
               {t('reject')}

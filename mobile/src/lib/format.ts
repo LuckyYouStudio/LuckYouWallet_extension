@@ -13,3 +13,5 @@ export const formatAmount = (value: string, maxDecimals = 6) => {
   if (n < 10 ** -maxDecimals) return `<${10 ** -maxDecimals}`;
   return n.toLocaleString('en-US', { maximumFractionDigits: maxDecimals });
 };
+
+export { formatUsd, usdValue } from '@core/prices';

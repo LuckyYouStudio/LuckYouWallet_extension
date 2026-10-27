@@ -4,12 +4,12 @@ import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Avatar, Button, Field, ListItem, Screen } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
-import { formatAmount } from '@/lib/format';
+import { formatAmount, formatUsd, usdValue } from '@/lib/format';
 import { colors } from '@/theme';
 
 export default function Send() {
   const { token: tokenAddress } = useLocalSearchParams<{ token?: string }>();
-  const { t, network, adapter, balance, tokens, tokenBalances } = useWallet();
+  const { t, network, adapter, balance, tokens, tokenBalances, prices } = useWallet();
   const token = useMemo(() => tokens.find((x) => x.address === tokenAddress), [tokens, tokenAddress]);
   const symbol = token ? token.symbol : network?.symbol || 'ETH';
   const isValidAddress = (a: string) => !!adapter?.isValidAddress(a);
@@ -23,6 +23,8 @@ export default function Send() {
   const amountNum = Number(amount);
   const amountError = amount && (!(amountNum > 0) || amountNum > Number(available)) ? t('invalidAmount') : null;
   const valid = isValidAddress(to) && amountNum > 0 && !amountError;
+  const price = token ? prices.tokens[token.address] : prices.native;
+  const amountUsd = amountNum > 0 ? formatUsd(usdValue(amount, price)) : '';
 
   return (
     <Screen
@@ -68,10 +70,12 @@ export default function Send() {
         }
         style={{ fontSize: 22, fontWeight: '700' }}
       />
+      {amountUsd ? <Text style={styles.usd}>≈ {amountUsd}</Text> : null}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
   link: { color: colors.primary, fontWeight: '700', fontSize: 14 },
+  usd: { color: colors.textSecondary, fontSize: 15, fontWeight: '600', marginTop: -6, paddingHorizontal: 4 },
 });

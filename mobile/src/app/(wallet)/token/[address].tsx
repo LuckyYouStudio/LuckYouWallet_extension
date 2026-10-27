@@ -4,12 +4,12 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Avatar, Button, Card, KeyValue, Screen } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
-import { formatAmount, shortAddress } from '@/lib/format';
+import { formatAmount, formatUsd, shortAddress, usdValue } from '@/lib/format';
 import { colors } from '@/theme';
 
 export default function TokenDetail() {
   const { address } = useLocalSearchParams<{ address: string }>();
-  const { t, tokens, tokenBalances } = useWallet();
+  const { t, tokens, tokenBalances, prices } = useWallet();
   const token = tokens.find((x) => x.address === address);
   if (!token) return <Screen>{null}</Screen>;
 
@@ -21,6 +21,9 @@ export default function TokenDetail() {
         <Text style={styles.amount}>
           {formatAmount(tokenBalances[token.address] || '0')} <Text style={styles.symbol}>{token.symbol}</Text>
         </Text>
+        {prices.tokens[token.address] != null ? (
+          <Text style={styles.usd}>≈ {formatUsd(usdValue(tokenBalances[token.address] || '0', prices.tokens[token.address]))}</Text>
+        ) : null}
         <Text style={styles.name}>{token.name}</Text>
       </View>
       <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -42,6 +45,7 @@ export default function TokenDetail() {
 }
 
 const styles = StyleSheet.create({
+  usd: { color: colors.textSecondary, fontSize: 16, fontWeight: '600' },
   hero: { alignItems: 'center', gap: 8, paddingVertical: 16 },
   amount: { color: colors.text, fontSize: 34, fontWeight: '800', marginTop: 8 },
   symbol: { fontSize: 18, color: colors.textSecondary },

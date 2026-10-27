@@ -367,3 +367,38 @@ html, body {
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+
+/* USD values */
+.balance-usd { margin-top: 4px; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, 0.85); position: relative; }
+.usd-hint { margin-top: -4px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+
+/* Network fee row on confirm pages */
+.fee-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 4px 0 10px; background: none; border: none; color: var(--text); text-align: left; cursor: pointer; }
+.fee-row:disabled { cursor: default; }
+.fee-row .k { color: var(--text-secondary); font-size: 13px; }
+.fee-level { display: inline-flex; align-items: center; gap: 2px; margin-top: 3px; color: var(--primary-hover); font-size: 13px; font-weight: 700; }
+.fee-level svg { transform: rotate(-90deg); }
+
+/* Fee editor sheet */
+.sheet-backdrop { position: fixed; inset: 0; z-index: 120; background: rgba(5, 6, 10, 0.72); backdrop-filter: blur(4px); display: flex; align-items: flex-end; justify-content: center; animation: fade-in 0.15s ease; }
+.sheet { width: 100%; max-width: 400px; max-height: 92%; overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border); border-bottom: none; border-radius: 20px 20px 0 0; animation: sheet-up 0.2s ease; }
+.sheet-header { position: relative; display: flex; align-items: center; justify-content: center; padding: 16px 16px 10px; }
+.sheet-header h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.sheet-header .icon-btn { position: absolute; right: 10px; top: 10px; }
+.sheet-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 14px 18px; }
+.fee-option { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); cursor: pointer; text-align: left; transition: all 0.15s ease; }
+.fee-option:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+.fee-option.active { background: var(--primary-soft); border-color: var(--primary); }
+.fee-option.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--primary); }
+.fee-name { font-size: 14px; font-weight: 700; }
+.fee-values { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.fee-main { font-size: 14px; font-weight: 700; }
+.fee-sub { font-size: 12px; color: var(--text-secondary); }
+.fee-max { font-size: 11px; color: var(--text-muted); }
+.fee-custom { display: flex; flex-direction: column; gap: 10px; }
+.fee-status { display: flex; justify-content: space-between; padding: 4px 2px 0; font-size: 12px; color: var(--text-muted); }
+.rotate-45 { transform: rotate(45deg); }
+.rotate-180 { transform: rotate(180deg); }
+@keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.fee-row > span:first-child { display: flex; flex-direction: column; }
+.fee-row + .kv { border-top: 1px solid var(--border); }

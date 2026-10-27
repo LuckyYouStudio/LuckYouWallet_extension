@@ -12,6 +12,7 @@ import {
   getAddress,
 } from 'ethers';
 import { KNOWN_TOKENS } from './tokens';
+import { EvmGasSettings, gasOverrides } from './fees';
 
 // 使用 any 类型避免 Chrome API 类型冲突
 declare const chrome: any;
@@ -416,6 +417,7 @@ export async function sendEth(
   to: string,
   amountEth: string,
   network: NetworkKey,
+  gas?: EvmGasSettings,
 ): Promise<{ hash: string; status: number }> {
   const allNetworks = await getAllNetworks();
   const networkConfig = allNetworks[network];
@@ -431,7 +433,7 @@ export async function sendEth(
     throw new Error('No wallet credentials provided');
   }
   
-  const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth) });
+  const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth), ...gasOverrides(gas) });
   const receipt = await tx.wait();
   const status = receipt ? Number((receipt as any).status ?? 0) : 0;
   const hash = receipt ? String((receipt as any).hash || tx.hash) : String(tx.hash);
@@ -443,6 +445,7 @@ export async function sendEthWithPrivateKey(
   to: string,
   amountEth: string,
   network: NetworkKey,
+  gas?: EvmGasSettings,
 ): Promise<{ hash: string; status: number }> {
   const allNetworks = await getAllNetworks();
   const networkConfig = allNetworks[network];
@@ -452,7 +455,7 @@ export async function sendEthWithPrivateKey(
   const provider = getProvider(networkConfig);
   const wallet = new Wallet(privateKey).connect(provider);
   
-  const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth) });
+  const tx = await wallet.sendTransaction({ to, value: parseEther(amountEth), ...gasOverrides(gas) });
   const receipt = await tx.wait();
   const status = receipt ? Number((receipt as any).status ?? 0) : 0;
   const hash = receipt ? String((receipt as any).hash || tx.hash) : String(tx.hash);
@@ -762,6 +765,7 @@ export async function sendToken(
   to: string,
   amount: string,
   network: NetworkKey,
+  gas?: EvmGasSettings,
 ): Promise<{ hash: string; status: number }> {
   const allNetworks = await getAllNetworks();
   const networkConfig = allNetworks[network];
@@ -772,7 +776,7 @@ export async function sendToken(
   const wallet = Wallet.fromPhrase(mnemonic.trim()).connect(provider);
   const contract = new Contract(token.address, ERC20_ABI, wallet);
   const value = parseUnits(amount, token.decimals);
-  const tx = await contract.transfer(to, value);
+  const tx = await contract.transfer(to, value, gasOverrides(gas));
   const receipt = await tx.wait();
   const status = receipt ? Number((receipt as any).status ?? 0) : 0;
   const hash = receipt ? String((receipt as any).hash || tx.hash) : String(tx.hash);
@@ -785,6 +789,7 @@ export async function sendTokenWithPrivateKey(
   to: string,
   amount: string,
   network: NetworkKey,
+  gas?: EvmGasSettings,
 ): Promise<{ hash: string; status: number }> {
   const allNetworks = await getAllNetworks();
   const networkConfig = allNetworks[network];
@@ -794,7 +799,7 @@ export async function sendTokenWithPrivateKey(
   const provider = getProvider(networkConfig);
   const wallet = new Wallet(privateKey).connect(provider);
   const contract = new Contract(token.address, ERC20_ABI, wallet);
-  const tx = await contract.transfer(to, parseUnits(amount, token.decimals));
+  const tx = await contract.transfer(to, parseUnits(amount, token.decimals), gasOverrides(gas));
   const receipt = await tx.wait();
   const status = receipt ? Number((receipt as any).status ?? 0) : 0;
   const hash = receipt ? String((receipt as any).hash || tx.hash) : String(tx.hash);

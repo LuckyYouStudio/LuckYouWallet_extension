@@ -7,7 +7,7 @@ import * as Haptics from 'expo-haptics';
 import { SymbolViewProps } from 'expo-symbols';
 import { Alert, Avatar, Button, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
-import { formatAmount, shortAddress } from '@/lib/format';
+import { formatAmount, formatUsd, shortAddress, usdValue } from '@/lib/format';
 import { colors, gradient } from '@/theme';
 
 const Action: React.FC<{ icon: SymbolViewProps['name']; label: string; onPress: () => void }> = ({ icon, label, onPress }) => (
@@ -24,10 +24,23 @@ const Action: React.FC<{ icon: SymbolViewProps['name']; label: string; onPress: 
 );
 
 export default function Home() {
-  const { t, address, unsupported, network, balance, tokens, tokenBalances, refreshing, refresh } = useWallet();
+  const { t, address, unsupported, network, balance, tokens, tokenBalances, prices, refreshing, refresh } = useWallet();
   const symbol = network?.symbol || 'ETH';
   const isEvm = network?.family === 'evm';
   const [copied, setCopied] = React.useState(false);
+
+  const nativeUsd = usdValue(balance, prices.native);
+  const tokenUsd = (address: string) => usdValue(tokenBalances[address] || '0', prices.tokens[address]);
+  // 总价值 = 原生币 + 有报价的代币；没有任何报价时不显示
+  const priced = [nativeUsd, ...tokens.map((x) => tokenUsd(x.address))].filter((v): v is number => v != null);
+  const totalUsd = priced.length ? priced.reduce((a, b) => a + b, 0) : null;
+
+  const amountWithUsd = (amount: string, usd: number | null) => (
+    <View style={{ alignItems: 'flex-end', gap: 2 }}>
+      <Text style={styles.amount}>{amount}</Text>
+      {usd != null ? <Text style={styles.amountUsd}>{formatUsd(usd)}</Text> : null}
+    </View>
+  );
 
   const copyAddress = async () => {
     await Clipboard.setStringAsync(address);
@@ -66,6 +79,9 @@ export default function Home() {
             </Text>
             <Text style={styles.balanceSymbol}>{symbol}</Text>
           </View>
+          {totalUsd != null ? (
+            <Text style={styles.totalUsd}>{t('totalValue')} {formatUsd(totalUsd)}</Text>
+          ) : null}
         </LinearGradient>
 
         <View style={styles.actions}>
@@ -81,7 +97,7 @@ export default function Home() {
             left={<LinearGradient colors={gradient} style={styles.nativeAvatar}><Text style={styles.nativeAvatarText}>{symbol[0]}</Text></LinearGradient>}
             title={symbol}
             subtitle={network?.name}
-            right={<Text style={styles.amount}>{balance == null ? '—' : formatAmount(balance)}</Text>}
+            right={amountWithUsd(balance == null ? '—' : formatAmount(balance), nativeUsd)}
             onPress={() => router.push('/send')}
           />
           {tokens.map((token) => (
@@ -90,7 +106,7 @@ export default function Home() {
               left={<Avatar label={token.symbol} seed={token.address} />}
               title={token.symbol}
               subtitle={token.name}
-              right={<Text style={styles.amount}>{formatAmount(tokenBalances[token.address] || '0')}</Text>}
+              right={amountWithUsd(formatAmount(tokenBalances[token.address] || '0'), tokenUsd(token.address))}
               onPress={() => router.push({ pathname: '/token/[address]', params: { address: token.address } })}
             />
           ))}
@@ -134,4 +150,6 @@ const styles = StyleSheet.create({
   nativeAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   nativeAvatarText: { color: '#fff', fontWeight: '800', fontSize: 15 },
   amount: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  amountUsd: { color: colors.textSecondary, fontSize: 13 },
+  totalUsd: { color: 'rgba(255,255,255,0.85)', fontSize: 15, fontWeight: '600', marginTop: 6 },
 });

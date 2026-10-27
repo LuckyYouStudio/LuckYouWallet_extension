@@ -1,4 +1,5 @@
 import type { TokenInfo } from '@core/wallet';
+import type { EvmGasSettings } from '@core/fees';
 
 export type ChainFamily = 'evm' | 'bitcoin' | 'solana' | 'tron';
 
@@ -35,9 +36,33 @@ export interface Asset {
   balance: string;
 }
 
+export type FeeLevel = 'low' | 'market' | 'aggressive' | 'custom';
+
+/** 用户选择的手续费参数；SOL / TRX 手续费固定，不可编辑 */
+export type FeeSettings =
+  | { kind: 'evm'; gas: EvmGasSettings }
+  | { kind: 'btc'; satPerVbyte: number };
+
+export interface FeeOption {
+  level: FeeLevel;
+  /** 预计手续费，单位为原生币 */
+  fee: string;
+  /** 最高可能扣除的手续费 (EIP-1559) */
+  maxFee?: string;
+  /** 预计确认时间，如 "~10 min" */
+  wait?: string;
+  settings: FeeSettings;
+}
+
 export interface FeeQuote {
   /** 预估手续费，单位为原生币 */
   fee: string;
+  maxFee?: string;
+  settings?: FeeSettings;
+  /** 可选档位；为空表示手续费不可编辑 */
+  options?: FeeOption[];
+  /** EVM: 下一个区块的 base fee (wei)；null 表示不支持 EIP-1559 */
+  baseFee?: bigint | null;
 }
 
 export interface SendResult {
@@ -50,6 +75,7 @@ export interface ChainAdapter {
   getBalance(address: string): Promise<string>;
   /** 内置主流代币中有余额的部分 */
   getTokens(address: string): Promise<Asset[]>;
-  estimateFee(from: string, to: string, amount: string, token?: TokenInfo): Promise<FeeQuote>;
-  send(account: ChainAccount, to: string, amount: string, token?: TokenInfo): Promise<SendResult>;
+  /** 不传 settings 时返回各档位 (默认市场档)；传入时按该参数估算 */
+  estimateFee(from: string, to: string, amount: string, token?: TokenInfo, settings?: FeeSettings): Promise<FeeQuote>;
+  send(account: ChainAccount, to: string, amount: string, token?: TokenInfo, settings?: FeeSettings): Promise<SendResult>;
 }
