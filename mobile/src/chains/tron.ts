@@ -4,7 +4,7 @@ import { hex } from '@scure/base';
 import type { TokenInfo } from '@core/wallet';
 import type { ActivityItem } from '@core/history';
 import { formatUnits, isTronAddress, parseUnits, tronAddressFromPublicKey, tronFromHex, tronToHex } from './encoding';
-import type { AppNetwork, Asset, ChainAccount, ChainAdapter } from './types';
+import { TX_PENDING, type AppNetwork, type Asset, type ChainAccount, type ChainAdapter } from './types';
 
 // 主网内置 TRC20 代币 (精度已在链上核对)
 const MAINNET_TOKENS: TokenInfo[] = [
@@ -115,8 +115,9 @@ export function createTronAdapter(network: AppNetwork): ChainAdapter {
   }
 
   async function waitForReceipt(txID: string, isContract: boolean): Promise<number> {
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
+    // 出块约 3 秒，每 1.5 秒查询一次 (最长约 60 秒)
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
       const info = await post<{ blockNumber?: number; receipt?: { result?: string }; result?: string }>(
         '/wallet/gettransactioninfobyid',
         { value: txID },
@@ -272,7 +273,11 @@ export function createTronAdapter(network: AppNetwork): ChainAdapter {
         const message = result.message ? new TextDecoder().decode(hex.decode(result.message)) : result.code;
         throw new Error(message || 'Broadcast failed');
       }
-      return { hash: tx.txID, status: await waitForReceipt(tx.txID, !!token) };
+      return { hash: tx.txID, status: TX_PENDING };
+    },
+
+    waitForConfirmation(hash, token) {
+      return waitForReceipt(hash, !!token);
     },
   };
 }

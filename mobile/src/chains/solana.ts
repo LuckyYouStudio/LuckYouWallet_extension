@@ -4,7 +4,7 @@ import { base64, hex } from '@scure/base';
 import type { TokenInfo } from '@core/wallet';
 import type { ActivityItem } from '@core/history';
 import { bs58, formatUnits, parseUnits } from './encoding';
-import type { AppNetwork, Asset, ChainAdapter } from './types';
+import { TX_PENDING, type AppNetwork, type Asset, type ChainAdapter } from './types';
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
@@ -367,20 +367,23 @@ export function createSolanaAdapter(network: AppNetwork): ChainAdapter {
       const signature = ed25519.sign(message, secret);
       const tx = new Uint8Array([...compactU16(1), ...signature, ...message]);
       const hash = await rpc<string>(endpoint, 'sendTransaction', [base64.encode(tx), { encoding: 'base64', preflightCommitment: 'confirmed' }]);
+      return { hash, status: TX_PENDING };
+    },
 
-      // 轮询确认状态 (最长约 60 秒)
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
+    /** 每秒轮询确认状态 (最长约 60 秒) */
+    async waitForConfirmation(hash) {
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
         const { value: statuses } = await rpc<{ value: ({ err: unknown; confirmationStatus?: string } | null)[] }>(
           endpoint,
           'getSignatureStatuses',
           [[hash]],
         );
         const status = statuses[0];
-        if (status?.err) return { hash, status: 0 };
-        if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') return { hash, status: 1 };
+        if (status?.err) return 0;
+        if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') return 1;
       }
-      return { hash, status: 1 };
+      return 1;
     },
   };
 }

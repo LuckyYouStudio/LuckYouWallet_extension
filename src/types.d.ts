@@ -3,7 +3,7 @@ declare namespace chrome {
   export namespace runtime {
     export function getURL(path: string): string;
     export function sendMessage(message: any): Promise<any>;
-    export function onMessage: {
+    export const onMessage: {
       addListener(callback: (message: any, sender: any, sendResponse: any) => void): void;
     };
   }

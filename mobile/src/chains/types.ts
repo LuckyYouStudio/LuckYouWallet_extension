@@ -66,6 +66,9 @@ export interface FeeQuote {
   baseFee?: bigint | null;
 }
 
+/** 交易状态：1 成功，0 失败，-1 已广播、等待确认 */
+export const TX_PENDING = -1;
+
 export interface SendResult {
   hash: string;
   status: number;
@@ -81,4 +84,6 @@ export interface ChainAdapter {
   send(account: ChainAccount, to: string, amount: string, token?: TokenInfo, settings?: FeeSettings): Promise<SendResult>;
   /** 链上交易记录 (含收款)；未实现的网络只显示本机发出的交易 */
   getHistory?(address: string, tokens: TokenInfo[]): Promise<ActivityItem[]>;
+  /** send 返回 TX_PENDING 时，用它等待链上确认，返回 1 成功 / 0 失败 */
+  waitForConfirmation?(hash: string, token?: TokenInfo): Promise<number>;
 }

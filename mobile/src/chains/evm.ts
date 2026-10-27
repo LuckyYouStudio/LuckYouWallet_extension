@@ -1,13 +1,8 @@
 import { formatEther, isAddress } from 'ethers';
-import {
-  detectKnownTokens,
-  getEthBalance,
-  sendEthWithPrivateKey,
-  sendTokenWithPrivateKey,
-} from '@core/wallet';
+import { broadcastNative, broadcastToken, detectKnownTokens, getEthBalance, waitForTransaction } from '@core/wallet';
 import { estimateTransferGasLimit, evmFeeCost, EvmGasSettings, FEE_LEVELS, suggestEvmFees } from '@core/fees';
 import { getEvmActivity, hasEvmHistory } from '@core/history';
-import type { AppNetwork, ChainAdapter, FeeOption } from './types';
+import { TX_PENDING, type AppNetwork, type ChainAdapter, type FeeOption } from './types';
 
 /** EVM 链直接复用插件的共享钱包核心 */
 export function createEvmAdapter(network: AppNetwork): ChainAdapter {
@@ -36,11 +31,15 @@ export function createEvmAdapter(network: AppNetwork): ChainAdapter {
       const market = options[1];
       return { fee: market.fee, maxFee: market.maxFee, settings: market.settings, options, baseFee: suggestion.baseFee };
     },
-    send(account, to, amount, token, settings) {
+    /** 广播后立即返回，确认由 waitForConfirmation 在后台完成 */
+    async send(account, to, amount, token, settings) {
       const gas = settings?.kind === 'evm' ? settings.gas : undefined;
-      return token
-        ? sendTokenWithPrivateKey(account.privateKey, token, to, amount, key, gas)
-        : sendEthWithPrivateKey(account.privateKey, to, amount, key, gas);
+      const secret = { privateKey: account.privateKey };
+      const hash = token
+        ? await broadcastToken(secret, token, to, amount, key, gas)
+        : await broadcastNative(secret, to, amount, key, gas);
+      return { hash, status: TX_PENDING };
     },
+    waitForConfirmation: (hash) => waitForTransaction(hash, key),
   };
 }

@@ -29,14 +29,16 @@ import {
   decryptWallet,
   WalletInfo,
   getEthBalance,
-  sendEth,
-  sendEthWithPrivateKey,
   TransactionRecord,
   NETWORKS,
   NetworkKey,
   getTokenInfo,
   TokenInfo,
   getTokenBalance,
+  getTokenBalances,
+  broadcastNative,
+  broadcastToken,
+  waitForTransaction,
   detectTokens,
   isTokenContract,
   getCurrentNetwork,
@@ -397,19 +399,57 @@ const Popup: React.FC = () => {
 
   useEffect(() => {
     if (!walletInfo) return;
-    tokens.forEach((token) => {
-      getTokenBalance(token, walletInfo.address, network)
-        .then((b) =>
-          setTokenBalances((prev) => ({
-            ...prev,
-            [token.address]: parseFloat(b).toFixed(5),
-          })),
-        )
-        .catch(() =>
-          setTokenBalances((prev) => ({ ...prev, [token.address]: '0' })),
-        );
-    });
+    // 一次 Multicall 查询所有代币余额
+    getTokenBalances(tokens, walletInfo.address, network)
+      .then((list) => {
+        const next: Record<string, string> = {};
+        tokens.forEach((token, i) => (next[token.address] = parseFloat(list[i]).toFixed(5)));
+        setTokenBalances((prev) => ({ ...prev, ...next }));
+      })
+      .catch(() => {});
   }, [tokens, walletInfo, network]);
+
+  // 弹窗打开期间每 15 秒自动刷新余额；余额增加时提示到账
+  const pollSnapshot = useRef<{ scope: string; native: string; tokens: string[] } | null>(null);
+  useEffect(() => {
+    if (!walletInfo?.address || !networkInitialized) return;
+    const address = walletInfo.address;
+    const scope = `${address}:${network}`;
+    const poll = async () => {
+      try {
+        const [native, tokenList] = await Promise.all([
+          getEthBalance(address, network),
+          getTokenBalances(tokens, address, network),
+        ]);
+        const prev = pollSnapshot.current;
+        if (prev && prev.scope === scope) {
+          const symbol = allNetworks[network]?.currencySymbol || 'ETH';
+          const gained = Number(native) - Number(prev.native);
+          const tokenIndex = tokenList.findIndex((b, i) => prev.tokens[i] != null && Number(b) > Number(prev.tokens[i]));
+          if (gained > 0) {
+            showToast(tr(`Received ${formatAmount(String(gained))} ${symbol}`, `收到 ${formatAmount(String(gained))} ${symbol}`), 4000);
+          } else if (tokenIndex >= 0) {
+            const diff = String(Number(tokenList[tokenIndex]) - Number(prev.tokens[tokenIndex]));
+            const sym = tokens[tokenIndex].symbol;
+            showToast(tr(`Received ${formatAmount(diff)} ${sym}`, `收到 ${formatAmount(diff)} ${sym}`), 4000);
+          }
+        }
+        pollSnapshot.current = { scope, native, tokens: tokenList };
+        setBalanceWithLog(parseFloat(native).toFixed(5), 'poll');
+        setBalanceLoaded(true);
+        const next: Record<string, string> = {};
+        tokens.forEach((token, i) => (next[token.address] = parseFloat(tokenList[i]).toFixed(5)));
+        setTokenBalances((p) => ({ ...p, ...next }));
+      } catch {
+        // 自动刷新失败不打扰用户，下一轮再试
+      }
+    };
+    pollSnapshot.current = null;
+    poll();
+    const timer = window.setInterval(poll, 15_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletInfo?.address, network, networkInitialized, tokens]);
 
   useEffect(() => {
     const loadTokenHistory = async () => {
@@ -826,6 +866,34 @@ const Popup: React.FC = () => {
     setFeeChoice({ level: 'market', gas: suggestion.levels.market });
   };
 
+  /** 更新本机发出交易的状态 (后台确认完成后调用) */
+  const updateRecordStatus = (hash: string, status: number, key: string) => {
+    setHistory((prev) => {
+      const updated = prev.map((r) => (r.hash === hash ? { ...r, status } : r));
+      localStorage.setItem(key, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  /** 后台等待确认，确认后更新记录与余额 (公共节点可能慢一个区块，稍后再刷新一次) */
+  const trackTransaction = (hash: string, key: string, onDone?: () => void) => {
+    waitForTransaction(hash, network)
+      .then((status) => {
+        updateRecordStatus(hash, status, key);
+        showToast(status === 1 ? tr('Transaction confirmed', '交易已确认') : tr('Transaction failed', '交易失败'), 2500);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!walletInfo) return;
+        const refreshNow = () => {
+          loadBalance(walletInfo.address, network, true);
+          onDone?.();
+        };
+        refreshNow();
+        window.setTimeout(refreshNow, 2500);
+      });
+  };
+
   const resetFee = () => {
     setFeeSuggestion(null);
     setFeeChoice(null);
@@ -857,49 +925,40 @@ const Popup: React.FC = () => {
 
   const handleConfirmEthTransaction = async () => {
     if (!walletInfo || !pendingTransaction || !feeChoice) return;
-    
+
     try {
       setSending(true);
-      let result;
-      
-      if (walletInfo.privateKey) {
-        // 私钥导入的钱包
-        result = await sendEthWithPrivateKey(walletInfo.privateKey, pendingTransaction.to, pendingTransaction.amount, network, feeChoice.gas);
-      } else if (walletInfo.mnemonic) {
-        // 助记词导入的钱包
-        result = await sendEth(walletInfo.mnemonic, pendingTransaction.to, pendingTransaction.amount, network, feeChoice.gas);
-      } else {
-        throw new Error('No wallet credentials available');
-      }
-      
-      const { hash, status } = result;
-      const success = Number(status) === 1;
-      alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
-      
+      // 广播后立即返回，确认在后台进行 (与 MetaMask 一致)
+      const hash = await broadcastNative(
+        { privateKey: walletInfo.privateKey, mnemonic: walletInfo.mnemonic },
+        pendingTransaction.to,
+        pendingTransaction.amount,
+        network,
+        feeChoice.gas,
+      );
       const record: TransactionRecord = {
         hash,
         from: walletInfo.address,
         to: pendingTransaction.to,
         value: parseFloat(pendingTransaction.amount).toFixed(5),
-        status: Number(status),
+        status: -1,
       };
-      
       const key = getHistoryKey(walletInfo.address, network);
       setHistory((prev) => {
         const updated = [record, ...prev];
         localStorage.setItem(key, JSON.stringify(updated));
         return updated;
       });
-      
-      const newBalance = await getEthBalance(walletInfo.address, network);
-      setBalanceWithLog(parseFloat(newBalance).toFixed(5), 'transaction-success');
+      showToast(tr('Transaction submitted', '交易已提交'), 2500);
+      trackTransaction(hash, key);
+
       setToAddress('');
       setAmount('');
       setPendingTransaction(null);
       resetFee();
       setView('wallet');
     } catch (e) {
-      alert('Failed to send transaction');
+      alert(`${tr('Failed to send transaction', '发送失败')}: ${(e as { shortMessage?: string; message?: string })?.shortMessage || (e as Error)?.message || e}`);
     } finally {
       setSending(false);
     }
@@ -907,36 +966,40 @@ const Popup: React.FC = () => {
 
   const handleConfirmTokenTransaction = async () => {
     if (!walletInfo || !pendingTransaction || !feeChoice || !pendingTransaction.token) return;
-    
+
     try {
       setSendingToken(true);
-      const { sendToken, sendTokenWithPrivateKey } = await import('../core/wallet');
       const { token, to, amount: value } = pendingTransaction;
-      // 私钥导入的钱包没有助记词，按私钥签名
-      const { hash, status } = walletInfo.privateKey
-        ? await sendTokenWithPrivateKey(walletInfo.privateKey, token, to, value, network, feeChoice.gas)
-        : await sendToken(walletInfo.mnemonic, token, to, value, network, feeChoice.gas);
-      const success = Number(status) === 1;
-      alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
+      const hash = await broadcastToken(
+        { privateKey: walletInfo.privateKey, mnemonic: walletInfo.mnemonic },
+        token,
+        to,
+        value,
+        network,
+        feeChoice.gas,
+      );
 
       // 记录本机发出的代币交易，链上索引收录前也能在活动中看到
-      const record: TransactionRecord = { hash, from: walletInfo.address, to, value: `${value} ${token.symbol}`, status: Number(status) };
+      const record: TransactionRecord = { hash, from: walletInfo.address, to, value: `${value} ${token.symbol}`, status: -1 };
       const historyKey = getHistoryKey(walletInfo.address, network);
       setHistory((prev) => {
         const updated = [record, ...prev];
         localStorage.setItem(historyKey, JSON.stringify(updated));
         return updated;
       });
-      
-      // 刷新代币余额
-      const b = await getTokenBalance(pendingTransaction.token, walletInfo.address, network);
-      setTokenBalances((prev) => ({ ...prev, [pendingTransaction.token!.address]: parseFloat(b).toFixed(5) }));
-      
+      showToast(tr('Transaction submitted', '交易已提交'), 2500);
+      // 确认后刷新代币余额
+      trackTransaction(hash, historyKey, () => {
+        getTokenBalance(token, walletInfo.address, network)
+          .then((b) => setTokenBalances((prev) => ({ ...prev, [token.address]: parseFloat(b).toFixed(5) })))
+          .catch(() => {});
+      });
+
       setPendingTransaction(null);
       resetFee();
       setView('tokenDetail');
     } catch (e) {
-      alert('Failed to send token');
+      alert(`${tr('Failed to send token', '发送失败')}: ${(e as { shortMessage?: string; message?: string })?.shortMessage || (e as Error)?.message || e}`);
     } finally {
       setSendingToken(false);
     }
@@ -1285,9 +1348,9 @@ const Popup: React.FC = () => {
   const nativeSymbol: string = currentNetwork?.currencySymbol || 'ETH';
   const explorerBase: string = (currentNetwork?.blockExplorer || '').replace(/\/$/, '');
 
-  const showToast = (message: string) => {
+  const showToast = (message: string, duration = 1600) => {
     setToast(message);
-    window.setTimeout(() => setToast(null), 1600);
+    window.setTimeout(() => setToast(null), duration);
   };
 
   const copyText = async (text: string) => {

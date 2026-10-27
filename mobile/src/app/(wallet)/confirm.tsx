@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import type { FeeLevel, FeeQuote } from '@/chains';
+import { TX_PENDING, type FeeLevel, type FeeQuote } from '@/chains';
 import { FeeSheet } from '@/components/FeeSheet';
 import { Alert, Button, Card, Icon, KeyValue, Screen } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
@@ -10,7 +10,7 @@ import { useAuthorize } from '@/lib/useAuthorize';
 import { errorMessage, formatAmount, formatUsd, shortAddress, usdValue } from '@/lib/format';
 import { colors } from '@/theme';
 
-type Phase = 'review' | 'sending' | 'done' | 'failed';
+type Phase = 'review' | 'sending' | 'submitted' | 'done' | 'failed';
 
 const LEVEL_LABELS = { low: 'feeLow', market: 'feeMarket', aggressive: 'feeAggressive', custom: 'feeCustom' } as const;
 
@@ -47,8 +47,10 @@ export default function Confirm() {
     try {
       const result = await send(params.to, params.amount, token, chosen?.settings);
       setHash(result.hash);
-      setPhase(result.status === 1 ? 'done' : 'failed');
-      Haptics.notificationAsync(result.status === 1 ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error);
+      // 已广播即返回，确认在后台进行 (与 MetaMask 一致)
+      const ok = result.status !== 0;
+      setPhase(result.status === TX_PENDING ? 'submitted' : ok ? 'done' : 'failed');
+      Haptics.notificationAsync(ok ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error);
     } catch (e) {
       setError(errorMessage(e));
       setPhase('failed');
@@ -63,8 +65,8 @@ export default function Confirm() {
 
   const txUrl = network?.txUrl;
 
-  if (phase === 'done' || phase === 'failed') {
-    const ok = phase === 'done';
+  if (phase === 'done' || phase === 'submitted' || phase === 'failed') {
+    const ok = phase !== 'failed';
     return (
       <Screen
         footer={
@@ -78,9 +80,10 @@ export default function Confirm() {
           <View style={[styles.resultIcon, { backgroundColor: ok ? colors.successSoft : colors.dangerSoft }]}>
             <Icon name={ok ? 'checkmark' : 'xmark'} size={38} color={ok ? colors.success : colors.danger} />
           </View>
-          <Text style={styles.resultTitle}>{ok ? t('sent') : t('sendFailed')}</Text>
+          <Text style={styles.resultTitle}>{phase === 'submitted' ? t('submitted') : ok ? t('sent') : t('sendFailed')}</Text>
           <Text style={styles.resultAmount}>{params.amount} {symbol}</Text>
           {hash ? <Text style={styles.hash} selectable>{hash}</Text> : null}
+          {phase === 'submitted' ? <Alert>{t('submittedNote')}</Alert> : null}
           {ok && network?.family === 'bitcoin' ? <Alert>{t('btcConfirmNote')}</Alert> : null}
           {error ? <Alert tone="danger">{error}</Alert> : null}
         </View>

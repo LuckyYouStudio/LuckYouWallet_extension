@@ -45,3 +45,12 @@ export async function appendHistory(address: string, network: NetworkKey, record
 export async function clearAll() {
   await AsyncStorage.clear();
 }
+
+/** 后台确认完成后更新本机发出交易的状态 */
+export async function updateHistoryStatus(address: string, network: NetworkKey, hash: string, status: number) {
+  const history = await loadHistory(address, network);
+  await kv.set(
+    historyKey(address, network),
+    history.map((r) => (r.hash === hash ? { ...r, status } : r)),
+  );
+}

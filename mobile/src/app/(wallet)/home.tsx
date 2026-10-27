@@ -24,10 +24,18 @@ const Action: React.FC<{ icon: SymbolViewProps['name']; label: string; onPress: 
 );
 
 export default function Home() {
-  const { t, address, unsupported, network, balance, tokens, tokenBalances, prices, refreshing, refresh } = useWallet();
+  const { t, address, unsupported, network, balance, tokens, tokenBalances, prices, refreshing, refresh, incoming, clearIncoming } = useWallet();
   const symbol = network?.symbol || 'ETH';
   const isEvm = network?.family === 'evm';
   const [copied, setCopied] = React.useState(false);
+
+  // 自动刷新发现到账：震动提示，几秒后自动消失
+  React.useEffect(() => {
+    if (!incoming) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const timer = setTimeout(clearIncoming, 5000);
+    return () => clearTimeout(timer);
+  }, [incoming, clearIncoming]);
 
   const nativeUsd = usdValue(balance, prices.native);
   const tokenUsd = (address: string) => usdValue(tokenBalances[address] || '0', prices.tokens[address]);
@@ -61,6 +69,13 @@ export default function Home() {
           <Icon name="gearshape.fill" size={18} color={colors.textSecondary} />
         </Pressable>
       </View>
+
+      {incoming ? (
+        <Pressable style={styles.incoming} onPress={() => router.push('/activity')}>
+          <Icon name="arrow.down.left" size={15} color={colors.success} />
+          <Text style={styles.incomingText}>{t('receivedToast', { amount: formatAmount(incoming.amount), symbol: incoming.symbol })}</Text>
+        </Pressable>
+      ) : null}
 
       {unsupported ? (
         <Alert tone="warning">{t('needsPhrase')}</Alert>
@@ -120,6 +135,19 @@ export default function Home() {
 
 const styles = StyleSheet.create({
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  incoming: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: colors.successSoft,
+    borderWidth: 1,
+    borderColor: colors.success,
+  },
+  incomingText: { color: colors.success, fontWeight: '700', fontSize: 14 },
   networkPill: {
     flexDirection: 'row',
     alignItems: 'center',

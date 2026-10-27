@@ -7,12 +7,12 @@ import {
   getAllNetworks,
   getCurrentNetwork,
   setCurrentNetwork,
-  getTokenBalance,
+  getTokenBalances,
   TokenInfo,
 } from '@core/wallet';
 import { getUsdPrices, UsdPrices } from '@core/prices';
-import { accountFor, AppNetwork, buildNetworks, ChainAccount, ChainAdapter, deriveChainAccounts, FeeQuote, FeeSettings, getAdapter } from '@/chains';
-import { appendHistory, clearAll, kv, loadTokens, saveTokens } from '@/lib/storage';
+import { accountFor, AppNetwork, buildNetworks, ChainAccount, ChainAdapter, deriveChainAccounts, FeeQuote, FeeSettings, getAdapter, TX_PENDING } from '@/chains';
+import { appendHistory, clearAll, kv, loadHistory, loadTokens, saveTokens, updateHistoryStatus } from '@/lib/storage';
 import * as vault from '@/lib/vault';
 import { detectLang, Lang, StringKey, strings } from '@/lib/i18n';
 
@@ -63,6 +63,10 @@ interface WalletContextValue {
   refresh: () => Promise<void>;
   addToken: (token: TokenInfo) => Promise<void>;
 
+  /** 自动刷新时发现的到账 (首页显示提示) */
+  incoming: Incoming | null;
+  clearIncoming: () => void;
+
   estimateFee: (to: string, amount: string, token?: TokenInfo, settings?: FeeSettings) => Promise<FeeQuote>;
   send: (to: string, amount: string, token?: TokenInfo, settings?: FeeSettings) => Promise<{ hash: string; status: number }>;
 }
@@ -70,6 +74,20 @@ interface WalletContextValue {
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 const NO_PRICES: UsdPrices = { native: null, tokens: {} };
+
+/** 自动刷新间隔：App 在前台且已解锁时每 15 秒查询一次余额 */
+const POLL_MS = 15_000;
+
+export interface Incoming {
+  id: number;
+  amount: string;
+  symbol: string;
+}
+
+/** 余额差值 (b - a)；只用于判断是否到账和提示显示，精度要求不高 */
+function decimalDiff(a: string, b: string): number {
+  return Number(b) - Number(a);
+}
 
 /** 助记词钱包补齐比特币 / Solana / Tron 账户 */
 function withChains(secret: vault.WalletSecret): vault.WalletSecret {
@@ -90,6 +108,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [tokenBalances, setTokenBalances] = useState<Record<string, string>>({});
   const [prices, setPrices] = useState<UsdPrices>(NO_PRICES);
+  const [incoming, setIncoming] = useState<Incoming | null>(null);
+  /** 上一次的余额快照，用于发现到账；切换地址/网络后重新开始 */
+  const lastBalances = useRef<{ scope: string; native: string | null; tokens: Record<string, string> } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const backgroundedAt = useRef<number | null>(null);
 
@@ -242,6 +263,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const getSecret = useCallback(() => secret, [secret]);
+  const clearIncoming = useCallback(() => setIncoming(null), []);
 
   /** 原生币余额 + 自动检测的主流代币 + (EVM) 用户手动添加的代币 */
   const fetchBalances = useCallback(async () => {
@@ -251,7 +273,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       adapter!.getTokens(address).catch(() => []),
       isEvm ? loadTokens(address, networkKey).catch(() => [] as TokenInfo[]) : Promise.resolve([] as TokenInfo[]),
     ]);
-    const manualBalances = await Promise.allSettled(manual.map((token) => getTokenBalance(token, address, networkKey)));
+    const manualBalances = await getTokenBalances(manual, address, networkKey).catch(() => manual.map(() => '0'));
     const list: TokenInfo[] = [];
     const balances: Record<string, string> = {};
     detected.forEach(({ token, balance: b }) => {
@@ -260,15 +282,31 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
     manual.forEach((token, i) => {
       if (list.some((x) => x.address.toLowerCase() === token.address.toLowerCase())) return;
-      const r = manualBalances[i];
       list.push(token);
-      balances[token.address] = r.status === 'fulfilled' ? r.value : '0';
+      balances[token.address] = manualBalances[i];
     });
     const usd = await getUsdPrices(networkKey, list.map((x) => x.address));
-    return { list, native, balances, usd };
+    return { list, native, balances, usd, scope: `${address}:${networkKey}`, symbol: network?.symbol || '' };
   }, [adapter, address, network, networkKey]);
 
   const applyBalances = useCallback((r: Awaited<ReturnType<typeof fetchBalances>>) => {
+    // 与上次快照比较：余额增加即视为到账
+    const prev = lastBalances.current;
+    if (prev && prev.scope === r.scope) {
+      if (prev.native != null && r.native != null && decimalDiff(prev.native, r.native) > 0) {
+        setIncoming({ id: Date.now(), amount: String(decimalDiff(prev.native, r.native)), symbol: r.symbol });
+      } else {
+        const token = r.list.find((t) => prev.tokens[t.address] != null && decimalDiff(prev.tokens[t.address], r.balances[t.address]) > 0);
+        if (token) {
+          setIncoming({
+            id: Date.now(),
+            amount: String(decimalDiff(prev.tokens[token.address], r.balances[token.address])),
+            symbol: token.symbol,
+          });
+        }
+      }
+    }
+    lastBalances.current = { scope: r.scope, native: r.native ?? prev?.native ?? null, tokens: r.balances };
     setTokens(r.list);
     setBalance(r.native);
     setTokenBalances(r.balances);
@@ -285,15 +323,57 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [address, adapter, fetchBalances, applyBalances]);
 
-  // 解锁或切换网络后自动加载余额
+  /** 后台静默刷新 (不显示下拉刷新的转圈) */
+  const silentRefresh = useCallback(async () => {
+    if (!address || !adapter) return;
+    try {
+      applyBalances(await fetchBalances());
+    } catch {
+      // 自动刷新失败不打扰用户，下一轮再试
+    }
+  }, [address, adapter, fetchBalances, applyBalances]);
+
+  // 解锁或切换网络后立即加载余额，之后在前台每 15 秒自动刷新；回到前台时立即刷新
   useEffect(() => {
     if (status !== 'unlocked' || !address || !adapter) return;
     let cancelled = false;
-    fetchBalances().then((r) => !cancelled && applyBalances(r));
+    fetchBalances().then((r) => !cancelled && applyBalances(r)).catch(() => {});
+    const timer = setInterval(() => {
+      if (AppState.currentState === 'active') silentRefresh();
+    }, POLL_MS);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') silentRefresh();
+    });
     return () => {
       cancelled = true;
+      clearInterval(timer);
+      sub.remove();
     };
-  }, [status, address, adapter, fetchBalances, applyBalances]);
+  }, [status, address, adapter, fetchBalances, applyBalances, silentRefresh]);
+
+  /** 后台等待交易确认，确认后更新记录并刷新余额 (公共节点可能慢一个区块，稍后再刷新一次) */
+  const track = useCallback(
+    (hash: string, token?: TokenInfo) => {
+      if (!adapter?.waitForConfirmation) return;
+      adapter
+        .waitForConfirmation(hash, token)
+        .then((txStatus) => updateHistoryStatus(address, networkKey, hash, txStatus))
+        .catch(() => {})
+        .finally(() => {
+          silentRefresh();
+          setTimeout(silentRefresh, 2500);
+        });
+    },
+    [adapter, address, networkKey, silentRefresh],
+  );
+
+  // 上次退出时仍在等待确认的交易：重新跟踪
+  useEffect(() => {
+    if (status !== 'unlocked' || !address || !adapter?.waitForConfirmation) return;
+    loadHistory(address, networkKey)
+      .then((records) => records.filter((r) => r.status === TX_PENDING).forEach((r) => track(r.hash)))
+      .catch(() => {});
+  }, [status, address, networkKey, adapter, track]);
 
   const switchNetwork = useCallback(async (key: string) => {
     await setCurrentNetwork(key);
@@ -333,10 +413,11 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         value: token ? `${amount} ${token.symbol}` : amount,
         status: result.status,
       });
-      refresh();
+      if (result.status === TX_PENDING) track(result.hash, token);
+      silentRefresh();
       return result;
     },
-    [account, adapter, address, networkKey, refresh],
+    [account, adapter, address, networkKey, silentRefresh, track],
   );
 
   const value = useMemo<WalletContextValue>(
@@ -346,13 +427,14 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       unlock, unlockWithBiometrics, biometricsEnabled, biometricsAvailable, setBiometrics, lock, reset, getSecret,
       address, unsupported, networkKey, network, networks, switchNetwork, adapter,
       balance, tokens, tokenBalances, prices, refreshing, refresh, addToken,
+      incoming, clearIncoming,
       estimateFee, send,
     }),
     [
       status, retryBoot, lang, t, setLang, draft, startCreate, startImport, finishSetup, unlock, unlockWithBiometrics,
       biometricsEnabled, biometricsAvailable, setBiometrics, lock, reset, getSecret, address, unsupported, networkKey,
       network, networks, switchNetwork, adapter, balance, tokens, tokenBalances, prices, refreshing, refresh, addToken,
-      estimateFee, send,
+      incoming, clearIncoming, estimateFee, send,
     ],
   );
 

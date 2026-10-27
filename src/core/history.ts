@@ -169,7 +169,8 @@ export function localToActivity(record: TransactionRecord, nativeSymbol: string)
     value,
     symbol: tokenSymbol || nativeSymbol,
     timestamp: 0,
-    status: record.status === 1 ? 'success' : 'failed',
+    // 1 成功，0 失败，-1 已广播待确认
+    status: record.status === 1 ? 'success' : record.status === 0 ? 'failed' : 'pending',
   };
 }
 

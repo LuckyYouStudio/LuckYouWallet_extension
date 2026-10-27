@@ -10,6 +10,7 @@ import {
   zeroPadValue,
   isAddress,
   getAddress,
+  Interface,
 } from 'ethers';
 import { KNOWN_TOKENS } from './tokens';
 import { EvmGasSettings, gasOverrides } from './fees';
@@ -201,6 +202,8 @@ export function getProvider(network: NetworkConfig): JsonRpcProvider {
   let provider = providers.get(key);
   if (!provider) {
     provider = new JsonRpcProvider(network.rpcUrl, network.chainId, { staticNetwork: true });
+    // 默认 4 秒轮询一次，缩短后交易确认能更快被发现
+    provider.pollingInterval = 1000;
     providers.set(key, provider);
   }
   return provider;
@@ -462,6 +465,51 @@ export async function sendEthWithPrivateKey(
   return { hash, status };
 }
 
+/** 签名用的钱包凭据：私钥优先，否则从助记词派生 */
+export interface SignerSecret {
+  privateKey?: string;
+  mnemonic?: string;
+}
+
+async function signerFor(secret: SignerSecret, network: NetworkKey) {
+  const networkConfig = (await getAllNetworks())[network];
+  if (!networkConfig) throw new Error(`Network ${network} not found`);
+  const provider = getProvider(networkConfig);
+  if (secret.privateKey) return new Wallet(secret.privateKey, provider);
+  if (secret.mnemonic?.trim()) return Wallet.fromPhrase(secret.mnemonic.trim()).connect(provider);
+  throw new Error('No wallet credentials provided');
+}
+
+/** 广播原生币转账，不等待确认，返回交易哈希 */
+export async function broadcastNative(secret: SignerSecret, to: string, amount: string, network: NetworkKey, gas?: EvmGasSettings): Promise<string> {
+  const wallet = await signerFor(secret, network);
+  const tx = await wallet.sendTransaction({ to, value: parseEther(amount), ...gasOverrides(gas) });
+  return tx.hash;
+}
+
+/** 广播 ERC-20 转账，不等待确认，返回交易哈希 */
+export async function broadcastToken(
+  secret: SignerSecret,
+  token: TokenInfo,
+  to: string,
+  amount: string,
+  network: NetworkKey,
+  gas?: EvmGasSettings,
+): Promise<string> {
+  const wallet = await signerFor(secret, network);
+  const contract = new Contract(token.address, ERC20_ABI, wallet);
+  const tx = await contract.transfer(to, parseUnits(amount, token.decimals), gasOverrides(gas));
+  return tx.hash;
+}
+
+/** 等待交易确认 (每秒轮询)；返回 1 成功 / 0 失败，超时抛出错误 */
+export async function waitForTransaction(hash: string, network: NetworkKey, timeoutMs = 10 * 60_000): Promise<number> {
+  const networkConfig = (await getAllNetworks())[network];
+  if (!networkConfig) throw new Error(`Network ${network} not found`);
+  const receipt = await getProvider(networkConfig).waitForTransaction(hash, 1, timeoutMs);
+  return Number(receipt?.status ?? 0);
+}
+
 export interface GasEstimate {
   gasLimit: string;
   gasPrice: string;
@@ -673,6 +721,37 @@ export async function detectTokens(
 }
 
 /** 检测当前链内置主流代币中有余额的那些，返回代币及余额 */
+// Multicall3：一次 eth_call 查询多个代币余额 (各链地址已核对；zkSync Era 使用官方部署地址)
+const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
+const MULTICALL3_BY_CHAIN: Record<number, string> = { 324: '0xF9cda624FBC7e059355ce98a31693d299FACd963' };
+const MULTICALL3_ABI = [
+  'function aggregate3((address target, bool allowFailure, bytes callData)[] calls) view returns ((bool success, bytes returnData)[])',
+];
+const erc20Interface = new Interface(['function balanceOf(address) view returns (uint256)']);
+
+/** 批量查询代币余额；Multicall 不可用时逐个查询。查询失败的代币余额记为 0 */
+export async function getTokenBalances(tokens: TokenInfo[], owner: string, network: NetworkKey): Promise<string[]> {
+  if (tokens.length === 0) return [];
+  const networkConfig = (await getAllNetworks())[network];
+  if (!networkConfig) throw new Error(`Network ${network} not found`);
+  const provider = getProvider(networkConfig);
+  try {
+    const multicall = new Contract(MULTICALL3_BY_CHAIN[networkConfig.chainId] || MULTICALL3, MULTICALL3_ABI, provider);
+    const callData = erc20Interface.encodeFunctionData('balanceOf', [owner]);
+    const results: { success: boolean; returnData: string }[] = await multicall.aggregate3.staticCall(
+      tokens.map((token) => ({ target: token.address, allowFailure: true, callData })),
+    );
+    return results.map((r, i) => {
+      if (!r.success || r.returnData === '0x') return '0';
+      const [balance] = erc20Interface.decodeFunctionResult('balanceOf', r.returnData);
+      return formatUnits(balance, tokens[i].decimals);
+    });
+  } catch {
+    const settled = await Promise.allSettled(tokens.map((token) => getTokenBalance(token, owner, network)));
+    return settled.map((r) => (r.status === 'fulfilled' ? r.value : '0'));
+  }
+}
+
 export async function detectKnownTokens(
   owner: string,
   network: NetworkKey,
@@ -680,13 +759,8 @@ export async function detectKnownTokens(
   const allNetworks = await getAllNetworks();
   const networkConfig = allNetworks[network];
   const candidates = networkConfig ? KNOWN_TOKENS[networkConfig.chainId] || [] : [];
-  const results = await Promise.allSettled(candidates.map((token) => getTokenBalance(token, owner, network)));
-  return candidates
-    .map((token, i) => {
-      const r = results[i];
-      return { token, balance: r.status === 'fulfilled' ? r.value : '0' };
-    })
-    .filter(({ balance }) => Number(balance) > 0);
+  const balances = await getTokenBalances(candidates, owner, network);
+  return candidates.map((token, i) => ({ token, balance: balances[i] })).filter(({ balance }) => Number(balance) > 0);
 }
 
 export async function isTokenContract(
