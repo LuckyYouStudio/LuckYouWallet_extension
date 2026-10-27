@@ -1,0 +1,145 @@
+// 链与代币图标 (来自 Trust Wallet assets，MIT 许可)，图片随 App / 插件打包，不在运行时联网加载
+// 本文件只把网络 / 代币映射到图标文件名；插件从 /logos/<name>.png 读取，App 见 mobile/src/lib/logoSources.ts
+// 由脚本根据内置代币列表生成；新增内置代币后可手动补充映射
+
+/** 网络图标 (网络列表、网络切换按钮) */
+const NETWORK_LOGOS: Record<string, string> = {
+  "arbitrum": "chain-arbitrum",
+  "avalanche": "chain-avalanche",
+  "base": "chain-base",
+  "bitcoin": "chain-bitcoin",
+  "bitcoinTestnet": "chain-bitcoin",
+  "bsc": "chain-bsc",
+  "hyperevm": "chain-hyperevm",
+  "linea": "chain-linea",
+  "lineaSepolia": "chain-linea",
+  "mainnet": "chain-mainnet",
+  "megaeth": "chain-megaeth",
+  "monad": "chain-monad",
+  "optimism": "chain-optimism",
+  "polygon": "chain-polygon",
+  "sei": "chain-sei",
+  "sepolia": "chain-sepolia",
+  "solana": "chain-solana",
+  "solanaDevnet": "chain-solana",
+  "tron": "chain-tron",
+  "tronNile": "chain-tron",
+  "zksync": "chain-zksync",
+};
+
+/** 原生币图标：以太坊 L2 与测试网的原生币为 ETH */
+const NATIVE_LOGOS: Record<string, string> = {
+  "arbitrum": "chain-mainnet",
+  "avalanche": "chain-avalanche",
+  "base": "chain-mainnet",
+  "bitcoin": "chain-bitcoin",
+  "bitcoinTestnet": "chain-bitcoin",
+  "bsc": "chain-bsc",
+  "hyperevm": "chain-hyperevm",
+  "linea": "chain-mainnet",
+  "lineaSepolia": "chain-mainnet",
+  "mainnet": "chain-mainnet",
+  "megaeth": "chain-mainnet",
+  "monad": "chain-monad",
+  "optimism": "chain-mainnet",
+  "polygon": "chain-polygon",
+  "sei": "chain-sei",
+  "sepolia": "chain-mainnet",
+  "solana": "chain-solana",
+  "solanaDevnet": "chain-solana",
+  "tron": "chain-tron",
+  "tronNile": "chain-tron",
+  "zksync": "chain-mainnet",
+};
+
+/** 代币图标，按合约地址 / mint (小写) */
+const TOKEN_LOGOS: Record<string, string> = {
+  "0x0b2c639c533813f4aa9d7837caf62653d097ff85": "t01",
+  "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270": "chain-polygon",
+  "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82": "t02",
+  "0x176211869ca2b568f2a7d4ee941e073a821ee1ff": "t03",
+  "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3": "t04",
+  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6": "t05",
+  "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4": "t01",
+  "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984": "t06",
+  "0x2170ed0880ac9a755fd29b2688956bd959f933f8": "chain-mainnet",
+  "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": "t05",
+  "0x2791bca1f2de4661ed88a30c99a7a9449aa84174": "t03",
+  "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22": "t07",
+  "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f": "t05",
+  "0x3355df6d4c9c3035724fd0e3914de96a5a83aaf4": "t01",
+  "0x3bd359c1119da7da1d913d1c4d2b7c461115433a": "t08",
+  "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359": "t01",
+  "0x4200000000000000000000000000000000000006": "t09",
+  "0x4200000000000000000000000000000000000042": "t10",
+  "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "t11",
+  "0x514910771af9ca656af840dff83e8264ecf986ca": "t12",
+  "0x55d398326f99059ff775485246999027b3197955": "t13",
+  "0x6982508145454ce325ddbe47a25d4ec3d2311933": "t14",
+  "0x6b175474e89094c44da98b954eedeac495271d0f": "t04",
+  "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c": "t15",
+  "0x754704bc059f8c67012fed69bc8a327a5aafb603": "t16",
+  "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619": "chain-mainnet",
+  "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": "t17",
+  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "t01",
+  "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": "t03",
+  "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063": "t04",
+  "0x912ce59144191c1204e64559fe8253a0e49e6548": "t18",
+  "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58": "t19",
+  "0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce": "t20",
+  "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7": "t21",
+  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "t03",
+  "0xae7ab96520de3a18e5e111b5eaab095312d7fe84": "t22",
+  "0xaf88d065e77c8cc2239327c5edb3a432268e5831": "t01",
+  "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7": "t23",
+  "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e": "t24",
+  "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": "t25",
+  "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "chain-mainnet",
+  "0xc2132d05d31c914a87c6611c10748aeb04b58e8f": "t13",
+  "0xd586e7f844cea2f87f50152665bcbc2c279d8d70": "t11",
+  "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "t24",
+  "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1": "t26",
+  "0xdac17f958d2ee523a2206206994597c13d831ec7": "t13",
+  "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f": "t17",
+  "0xf97f4df75117a78c1a5a0dbb814af92458539fb4": "t12",
+  "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": "t27",
+  "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": "t13",
+  "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8": "t01",
+  "dezxaz8z7pnrnrjjz3wxborgixca6xjnb7yab1ppb263": "t28",
+  "ekpqgsjtjmfqkz9kqansqyxrcf8fbopzlhyxdm65zcjm": "t29",
+  "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v": "t03",
+  "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb": "t13",
+  "jupyiwryjfskupiha7hker8vutaefosybkedznsdvcn": "t30",
+  "tekxitehnzsmse2xqrbj4w32run966rdz8": "t01",
+  "tnuc9qb1rrps5cbwlmnmxxbjyfoydxjwfr": "chain-tron",
+  "tpymhehy5n8tcefygqw2rpxsghsfzghpdn": "t31",
+  "tr7nhqjekqxgtci8q8zy4pl8otszgjlj6t": "t13",
+};
+
+/** 没有专属图标的代币按符号复用同名主流代币或所在链的图标 */
+const SYMBOL_LOGOS: Record<string, string> = {
+  "BTC.b": "chain-bitcoin",
+  "DAI": "t04",
+  "LINK": "t12",
+  "USDC": "t03",
+  "USDC.e": "t03",
+  "USDC.n": "t03",
+  "USDT": "t13",
+  "USD₮0": "t13",
+  "WBTC": "t05",
+  "WETH": "chain-mainnet",
+  "WETH.e": "chain-mainnet",
+  "WHYPE": "chain-hyperevm",
+  "WSEI": "chain-sei",
+  "ZK": "chain-zksync",
+  "cbBTC": "chain-bitcoin",
+};
+
+export const LOGO_FILES = ["chain-arbitrum","chain-avalanche","chain-base","chain-bitcoin","chain-bsc","chain-hyperevm","chain-linea","chain-mainnet","chain-megaeth","chain-monad","chain-optimism","chain-polygon","chain-sei","chain-sepolia","chain-solana","chain-tron","chain-zksync","t01","t02","t03","t04","t05","t06","t07","t08","t09","t10","t11","t12","t13","t14","t15","t16","t17","t18","t19","t20","t21","t22","t23","t24","t25","t26","t27","t28","t29","t30","t31"] as const;
+
+export const networkLogo = (networkKey: string): string | null => NETWORK_LOGOS[networkKey] ?? null;
+
+export const nativeLogo = (networkKey: string): string | null => NATIVE_LOGOS[networkKey] ?? null;
+
+export const tokenLogo = (address: string, symbol?: string): string | null =>
+  TOKEN_LOGOS[address.toLowerCase()] ?? (symbol ? SYMBOL_LOGOS[symbol] ?? null : null);

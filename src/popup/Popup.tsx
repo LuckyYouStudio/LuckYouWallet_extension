@@ -29,24 +29,31 @@ import {
   decryptWallet,
   WalletInfo,
   getEthBalance,
-  sendEth,
-  sendEthWithPrivateKey,
-  getTransactionHistory,
   TransactionRecord,
   NETWORKS,
   NetworkKey,
   getTokenInfo,
   TokenInfo,
   getTokenBalance,
+  getTokenBalances,
+  broadcastNative,
+  broadcastToken,
+  waitForTransaction,
   detectTokens,
   isTokenContract,
-  GasEstimate,
   getCurrentNetwork,
   setCurrentNetwork,
   getAllNetworks,
 
 } from '../core/wallet';
+import { estimateTransferGasLimit, evmFeeCost, EvmFeeSuggestion, EvmGasSettings, suggestEvmFees } from '../core/fees';
+import { formatUsd, getUsdPrices, UsdPrices, usdValue } from '../core/prices';
+import { FeeChoice, FeeEditor, feeLabel } from './FeeEditor';
+import { formatEther } from 'ethers';
 import Activity from './Activity';
+import { Icon, PageHeader, shortAddress, formatAmount, CoinLogo } from './ui';
+import { nativeLogo, networkLogo, tokenLogo } from '../core/logos';
+import './theme.css';
 import NetworkManager from './NetworkManager';
 import { translations, Lang, TranslationKey } from '../core/i18n';
 
@@ -57,6 +64,7 @@ type View =
   | 'unlock'
   | 'wallet'
   | 'send'
+  | 'receive'
   | 'activity'
   | 'addToken'
   | 'tokenDetail'
@@ -104,6 +112,9 @@ const Popup: React.FC = () => {
   const [unlockPassword, setUnlockPassword] = useState('');
   const [encryptedWallet, setEncryptedWallet] = useState<string | null>(null);
   const [balance, setBalance] = useState('');
+  const [toast, setToast] = useState<string | null>(null);
+  const [mnemonicRevealed, setMnemonicRevealed] = useState(false);
+  const [backupConfirmed, setBackupConfirmed] = useState(false);
   
   // 授权和签名相关状态
   const [pendingAuth, setPendingAuth] = useState<any>(null);
@@ -184,7 +195,12 @@ const Popup: React.FC = () => {
   const [sendTokenTo, setSendTokenTo] = useState('');
   const [sendTokenAmount, setSendTokenAmount] = useState('');
   const [sendingToken, setSendingToken] = useState(false);
-  const [gasEstimate, setGasEstimate] = useState<GasEstimate | null>(null);
+  /** 默认费用档位与当前选中的 gas 参数 */
+  const [feeSuggestion, setFeeSuggestion] = useState<EvmFeeSuggestion | null>(null);
+  const [feeChoice, setFeeChoice] = useState<{ level: FeeChoice; gas: EvmGasSettings } | null>(null);
+  const [feeEditorOpen, setFeeEditorOpen] = useState(false);
+  /** 美元价格，记录所属网络，切换网络后旧价格不再使用 */
+  const [prices, setPrices] = useState<UsdPrices & { network: string }>({ network: '', native: null, tokens: {} });
   const [gasEstimating, setGasEstimating] = useState(false);
   const [pendingTransaction, setPendingTransaction] = useState<{
     type: 'eth' | 'token';
@@ -222,28 +238,15 @@ const Popup: React.FC = () => {
         // 从 chrome.storage.session 读取，实现浏览器进程会话锁定
         console.log('[LuckYou Wallet] 检查浏览器进程会话...');
         
-        let sessionResult = { wallet_session: null };
-        
-        // 检查 chrome.storage.session 是否可用
-        if (chrome.storage && chrome.storage.session) {
-          try {
-            sessionResult = await chrome.storage.session.get('wallet_session');
-            console.log('[LuckYou Wallet] 从 chrome.storage.session 获取会话结果:', sessionResult);
-          } catch (sessionError) {
-            console.warn('[LuckYou Wallet] chrome.storage.session 不可用，降级到 localStorage:', sessionError);
-            // 降级到 localStorage
-            const localSession = localStorage.getItem('walletSession');
-            if (localSession) {
-              sessionResult = { wallet_session: localSession };
-            }
-          }
-        } else {
-          console.warn('[LuckYou Wallet] chrome.storage.session API 不存在，使用 localStorage');
-          // 降级到 localStorage
-          const localSession = localStorage.getItem('walletSession');
-          if (localSession) {
-            sessionResult = { wallet_session: localSession };
-          }
+        // 清理旧版本遗留在磁盘上的明文会话
+        localStorage.removeItem('walletSession');
+        chrome.storage.local.remove('wallet_session').catch(console.error);
+
+        let sessionResult: { wallet_session?: string } = {};
+        try {
+          sessionResult = await chrome.storage.session.get('wallet_session');
+        } catch (sessionError) {
+          console.warn('[LuckYou Wallet] chrome.storage.session unavailable:', sessionError);
         }
         
         if (sessionResult.wallet_session) {
@@ -383,21 +386,71 @@ const Popup: React.FC = () => {
     loadTokens();
   }, [walletInfo, network]);
 
+  // 美元价格：网络或代币列表变化时刷新 (核心里有 60 秒缓存)
+  useEffect(() => {
+    if (!walletInfo?.address) return;
+    let cancelled = false;
+    getUsdPrices(network, tokens.map((x) => x.address)).then((p) => {
+      if (!cancelled) setPrices({ ...p, network });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [walletInfo?.address, network, tokens]);
+
   useEffect(() => {
     if (!walletInfo) return;
-    tokens.forEach((token) => {
-      getTokenBalance(token, walletInfo.address, network)
-        .then((b) =>
-          setTokenBalances((prev) => ({
-            ...prev,
-            [token.address]: parseFloat(b).toFixed(5),
-          })),
-        )
-        .catch(() =>
-          setTokenBalances((prev) => ({ ...prev, [token.address]: '0' })),
-        );
-    });
+    // 一次 Multicall 查询所有代币余额
+    getTokenBalances(tokens, walletInfo.address, network)
+      .then((list) => {
+        const next: Record<string, string> = {};
+        tokens.forEach((token, i) => (next[token.address] = parseFloat(list[i]).toFixed(5)));
+        setTokenBalances((prev) => ({ ...prev, ...next }));
+      })
+      .catch(() => {});
   }, [tokens, walletInfo, network]);
+
+  // 弹窗打开期间每 15 秒自动刷新余额；余额增加时提示到账
+  const pollSnapshot = useRef<{ scope: string; native: string; tokens: string[] } | null>(null);
+  useEffect(() => {
+    if (!walletInfo?.address || !networkInitialized) return;
+    const address = walletInfo.address;
+    const scope = `${address}:${network}`;
+    const poll = async () => {
+      try {
+        const [native, tokenList] = await Promise.all([
+          getEthBalance(address, network),
+          getTokenBalances(tokens, address, network),
+        ]);
+        const prev = pollSnapshot.current;
+        if (prev && prev.scope === scope) {
+          const symbol = allNetworks[network]?.currencySymbol || 'ETH';
+          const gained = Number(native) - Number(prev.native);
+          const tokenIndex = tokenList.findIndex((b, i) => prev.tokens[i] != null && Number(b) > Number(prev.tokens[i]));
+          if (gained > 0) {
+            showToast(tr(`Received ${formatAmount(String(gained))} ${symbol}`, `收到 ${formatAmount(String(gained))} ${symbol}`), 4000);
+          } else if (tokenIndex >= 0) {
+            const diff = String(Number(tokenList[tokenIndex]) - Number(prev.tokens[tokenIndex]));
+            const sym = tokens[tokenIndex].symbol;
+            showToast(tr(`Received ${formatAmount(diff)} ${sym}`, `收到 ${formatAmount(diff)} ${sym}`), 4000);
+          }
+        }
+        pollSnapshot.current = { scope, native, tokens: tokenList };
+        setBalanceWithLog(parseFloat(native).toFixed(5), 'poll');
+        setBalanceLoaded(true);
+        const next: Record<string, string> = {};
+        tokens.forEach((token, i) => (next[token.address] = parseFloat(tokenList[i]).toFixed(5)));
+        setTokenBalances((p) => ({ ...p, ...next }));
+      } catch {
+        // 自动刷新失败不打扰用户，下一轮再试
+      }
+    };
+    pollSnapshot.current = null;
+    poll();
+    const timer = window.setInterval(poll, 15_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletInfo?.address, network, networkInitialized, tokens]);
 
   useEffect(() => {
     const loadTokenHistory = async () => {
@@ -418,32 +471,13 @@ const Popup: React.FC = () => {
     const session: WalletSession = {
       info,
       source: src,
-      timestamp: Date.now(), // 保留时间戳用于日志记录
+      timestamp: Date.now(),
     };
-    
-    // 存储到 chrome.storage.session (浏览器进程关闭后自动清除)
-    if (chrome.storage && chrome.storage.session) {
-      try {
-        await chrome.storage.session.set({ wallet_session: JSON.stringify(session) });
-        console.log('[LuckYou Wallet] 钱包会话已保存到浏览器进程会话存储');
-      } catch (error) {
-        console.error('[LuckYou Wallet] Failed to save wallet session to chrome.storage.session:', error);
-        // 降级到 localStorage
-        localStorage.setItem('walletSession', JSON.stringify(session));
-        console.log('[LuckYou Wallet] 降级保存到 localStorage');
-      }
-    } else {
-      // 降级到 localStorage
-      localStorage.setItem('walletSession', JSON.stringify(session));
-      console.log('[LuckYou Wallet] chrome.storage.session 不可用，保存到 localStorage');
-    }
-    
-    // 同时存储到 chrome.storage.local 供 background script 使用
+    // 解密后的密钥只保存在内存型的 chrome.storage.session 中，绝不落盘
     try {
-      await chrome.storage.local.set({ wallet_session: JSON.stringify(session) });
-      console.log('[LuckYou Wallet] Wallet session saved to chrome.storage.local');
+      await chrome.storage.session.set({ wallet_session: JSON.stringify(session) });
     } catch (error) {
-      console.error('[LuckYou Wallet] Failed to save wallet session to chrome.storage.local:', error);
+      console.error('[LuckYou Wallet] Failed to save wallet session:', error);
     }
   };
 
@@ -451,6 +485,8 @@ const Popup: React.FC = () => {
     const w = createWallet();
     setWalletInfo(w);
     setSource('created');
+    setMnemonicRevealed(false);
+    setBackupConfirmed(false);
     setView('setPassword');
   };
 
@@ -645,38 +681,9 @@ const Popup: React.FC = () => {
 
   // 加载动画组件
   const LoadingSpinner: React.FC<{ message?: string }> = ({ message = 'Processing...' }) => (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.5)',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 9999,
-      color: 'white'
-    }}>
-      <div style={{
-        width: '40px',
-        height: '40px',
-        border: '4px solid rgba(255, 255, 255, 0.3)',
-        borderTop: '4px solid #007bff',
-        borderRadius: '50%',
-        animation: 'spin 1s linear infinite',
-        marginBottom: '16px'
-      }} />
-      <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>
-        {message}
-      </p>
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
+    <div className="overlay">
+      <div className="spinner" />
+      <p style={{ margin: 0 }}>{message}</p>
     </div>
   );
 
@@ -722,7 +729,7 @@ const Popup: React.FC = () => {
     
     try {
       const { ethers } = await import('ethers');
-      const { getCurrentNetwork, getAllNetworks } = await import('../core/wallet');
+      const { getCurrentNetwork, getAllNetworks, getProvider } = await import('../core/wallet');
       
       const currentNetwork = await getCurrentNetwork();
       const allNetworks = await getAllNetworks();
@@ -730,7 +737,7 @@ const Popup: React.FC = () => {
       
       console.log('[SIGNATURE DEBUG] Using network:', currentNetwork, 'RPC:', networkConfig.rpcUrl);
       
-      const provider = new ethers.JsonRpcProvider(networkConfig.rpcUrl);
+      const provider = getProvider(networkConfig);
       const wallet = new ethers.Wallet(walletInfo.privateKey, provider);
       
       console.log('[SIGNATURE DEBUG] Sending transaction:', transaction);
@@ -852,6 +859,48 @@ const Popup: React.FC = () => {
     setView('wallet');
   };
 
+  /** 估算 gas 上限并按最近区块给出 低 / 市场 / 激进 三档，默认选市场档 */
+  const loadFeeSuggestion = async (to: string, value: string, token?: TokenInfo) => {
+    const gasLimit = await estimateTransferGasLimit(walletInfo!.address, to, value, network, token);
+    const suggestion = await suggestEvmFees(network, gasLimit);
+    setFeeSuggestion(suggestion);
+    setFeeChoice({ level: 'market', gas: suggestion.levels.market });
+  };
+
+  /** 更新本机发出交易的状态 (后台确认完成后调用) */
+  const updateRecordStatus = (hash: string, status: number, key: string) => {
+    setHistory((prev) => {
+      const updated = prev.map((r) => (r.hash === hash ? { ...r, status } : r));
+      localStorage.setItem(key, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  /** 后台等待确认，确认后更新记录与余额 (公共节点可能慢一个区块，稍后再刷新一次) */
+  const trackTransaction = (hash: string, key: string, onDone?: () => void) => {
+    waitForTransaction(hash, network)
+      .then((status) => {
+        updateRecordStatus(hash, status, key);
+        showToast(status === 1 ? tr('Transaction confirmed', '交易已确认') : tr('Transaction failed', '交易失败'), 2500);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!walletInfo) return;
+        const refreshNow = () => {
+          loadBalance(walletInfo.address, network, true);
+          onDone?.();
+        };
+        refreshNow();
+        window.setTimeout(refreshNow, 2500);
+      });
+  };
+
+  const resetFee = () => {
+    setFeeSuggestion(null);
+    setFeeChoice(null);
+    setFeeEditorOpen(false);
+  };
+
   const handleSend = async () => {
     if (!walletInfo) return;
     
@@ -865,9 +914,7 @@ const Popup: React.FC = () => {
     // 预估 Gas 费用
     setGasEstimating(true);
     try {
-      const { estimateGasForEth } = await import('../core/wallet');
-      const estimate = await estimateGasForEth(walletInfo.address, toAddress, amount, network);
-      setGasEstimate(estimate);
+      await loadFeeSuggestion(toAddress, amount);
       setView('confirmEthTransaction');
     } catch (e) {
       alert('Failed to estimate gas');
@@ -878,86 +925,82 @@ const Popup: React.FC = () => {
   };
 
   const handleConfirmEthTransaction = async () => {
-    if (!walletInfo || !pendingTransaction || !gasEstimate) return;
-    
+    if (!walletInfo || !pendingTransaction || !feeChoice) return;
+
     try {
       setSending(true);
-      let result;
-      
-      if (walletInfo.privateKey) {
-        // 私钥导入的钱包
-        result = await sendEthWithPrivateKey(walletInfo.privateKey, pendingTransaction.to, pendingTransaction.amount, network);
-      } else if (walletInfo.mnemonic) {
-        // 助记词导入的钱包
-        result = await sendEth(walletInfo.mnemonic, pendingTransaction.to, pendingTransaction.amount, network);
-      } else {
-        throw new Error('No wallet credentials available');
-      }
-      
-      const { hash, status } = result;
-      const success = Number(status) === 1;
-      alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
-      
+      // 广播后立即返回，确认在后台进行 (与 MetaMask 一致)
+      const hash = await broadcastNative(
+        { privateKey: walletInfo.privateKey, mnemonic: walletInfo.mnemonic },
+        pendingTransaction.to,
+        pendingTransaction.amount,
+        network,
+        feeChoice.gas,
+      );
       const record: TransactionRecord = {
         hash,
         from: walletInfo.address,
         to: pendingTransaction.to,
         value: parseFloat(pendingTransaction.amount).toFixed(5),
-        status: Number(status),
+        status: -1,
       };
-      
       const key = getHistoryKey(walletInfo.address, network);
       setHistory((prev) => {
         const updated = [record, ...prev];
         localStorage.setItem(key, JSON.stringify(updated));
         return updated;
       });
-      
-      const newBalance = await getEthBalance(walletInfo.address, network);
-      setBalanceWithLog(parseFloat(newBalance).toFixed(5), 'transaction-success');
-      const txHistory = await getTransactionHistory(walletInfo.address, network);
-      if (txHistory.length > 0) {
-        setHistory(txHistory);
-        localStorage.setItem(key, JSON.stringify(txHistory));
-      }
-      
+      showToast(tr('Transaction submitted', '交易已提交'), 2500);
+      trackTransaction(hash, key);
+
       setToAddress('');
       setAmount('');
       setPendingTransaction(null);
-      setGasEstimate(null);
+      resetFee();
       setView('wallet');
     } catch (e) {
-      alert('Failed to send transaction');
+      alert(`${tr('Failed to send transaction', '发送失败')}: ${(e as { shortMessage?: string; message?: string })?.shortMessage || (e as Error)?.message || e}`);
     } finally {
       setSending(false);
     }
   };
 
   const handleConfirmTokenTransaction = async () => {
-    if (!walletInfo || !pendingTransaction || !gasEstimate || !pendingTransaction.token) return;
-    
+    if (!walletInfo || !pendingTransaction || !feeChoice || !pendingTransaction.token) return;
+
     try {
       setSendingToken(true);
-      const { sendToken } = await import('../core/wallet');
-      const { hash, status } = await sendToken(
-        walletInfo.mnemonic,
-        pendingTransaction.token,
-        pendingTransaction.to,
-        pendingTransaction.amount,
+      const { token, to, amount: value } = pendingTransaction;
+      const hash = await broadcastToken(
+        { privateKey: walletInfo.privateKey, mnemonic: walletInfo.mnemonic },
+        token,
+        to,
+        value,
         network,
+        feeChoice.gas,
       );
-      const success = Number(status) === 1;
-      alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
-      
-      // 刷新代币余额
-      const b = await getTokenBalance(pendingTransaction.token, walletInfo.address, network);
-      setTokenBalances((prev) => ({ ...prev, [pendingTransaction.token!.address]: parseFloat(b).toFixed(5) }));
-      
+
+      // 记录本机发出的代币交易，链上索引收录前也能在活动中看到
+      const record: TransactionRecord = { hash, from: walletInfo.address, to, value: `${value} ${token.symbol}`, status: -1 };
+      const historyKey = getHistoryKey(walletInfo.address, network);
+      setHistory((prev) => {
+        const updated = [record, ...prev];
+        localStorage.setItem(historyKey, JSON.stringify(updated));
+        return updated;
+      });
+      showToast(tr('Transaction submitted', '交易已提交'), 2500);
+      // 确认后刷新代币余额
+      trackTransaction(hash, historyKey, () => {
+        getTokenBalance(token, walletInfo.address, network)
+          .then((b) => setTokenBalances((prev) => ({ ...prev, [token.address]: parseFloat(b).toFixed(5) })))
+          .catch(() => {});
+      });
+
       setPendingTransaction(null);
-      setGasEstimate(null);
+      resetFee();
       setView('tokenDetail');
     } catch (e) {
-      alert('Failed to send token');
+      alert(`${tr('Failed to send token', '发送失败')}: ${(e as { shortMessage?: string; message?: string })?.shortMessage || (e as Error)?.message || e}`);
     } finally {
       setSendingToken(false);
     }
@@ -1149,17 +1192,7 @@ const Popup: React.FC = () => {
       } else {
         setHistory([]);
       }
-      
-      getTransactionHistory(walletInfo.address, network)
-        .then((h) => {
-          if (h.length > 0) {
-            setHistory(h);
-            localStorage.setItem(key, JSON.stringify(h));
-          }
-        })
-        .catch((e) => {
-          console.error('Failed to fetch history', e);
-        });
+      // 链上记录 (含收款) 由活动页按需查询
     } else {
       // 只有在没有钱包信息时才重置余额
       if (!walletInfo?.address) {
@@ -1311,1138 +1344,763 @@ const Popup: React.FC = () => {
     checkPendingSignatureAfterUnlock();
   }, [walletInfo?.privateKey, pendingSignature, view]);
 
-  return (
-    <div style={{ 
-      padding: '1.5rem', 
-      width: 360, 
-      minHeight: 500,
-      backgroundColor: '#f8f9fa',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      fontSize: '14px',
-      lineHeight: 1.5,
-      color: '#333'
-    }}>
-      {/* 语言切换按钮 */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'flex-end', 
-        gap: '0.5rem', 
-        marginBottom: '1rem' 
-      }}>
-        <button 
-          onClick={() => switchLang('en')}
-          style={{
-            padding: '0.25rem 0.5rem',
-            fontSize: '12px',
-            backgroundColor: lang === 'en' ? '#007bff' : '#e9ecef',
-            color: lang === 'en' ? 'white' : '#495057',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            transition: 'all 0.2s ease'
-          }}
-        >
-          EN
+  const tr = (en: string, zh: string) => (lang === 'zh' ? zh : en);
+  const currentNetwork = allNetworks[network];
+  const nativeSymbol: string = currentNetwork?.currencySymbol || 'ETH';
+  const explorerBase: string = (currentNetwork?.blockExplorer || '').replace(/\/$/, '');
+
+  const showToast = (message: string, duration = 1600) => {
+    setToast(message);
+    window.setTimeout(() => setToast(null), duration);
+  };
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(tr('Copied', '已复制'));
+    } catch {
+      showToast(tr('Copy failed', '复制失败'));
+    }
+  };
+
+  const openTx = (hash: string) => {
+    if (explorerBase) window.open(`${explorerBase}/tx/${hash}`, '_blank');
+  };
+
+  const handleSendTokenNext = async () => {
+    if (!walletInfo || !selectedToken) return;
+    setPendingTransaction({
+      type: 'token',
+      to: sendTokenTo,
+      amount: sendTokenAmount,
+      token: selectedToken,
+    });
+    setGasEstimating(true);
+    try {
+      await loadFeeSuggestion(sendTokenTo, sendTokenAmount, selectedToken);
+      setView('confirmTokenTransaction');
+    } catch (e) {
+      alert('Failed to estimate gas');
+      setPendingTransaction(null);
+    } finally {
+      setGasEstimating(false);
+    }
+  };
+
+  const formatWeiValue = (value?: string) => {
+    if (!value) return '0';
+    try {
+      return formatEther(BigInt(value));
+    } catch {
+      return value;
+    }
+  };
+
+  const showHeader = !['home', 'import', 'setPassword', 'unlock'].includes(view);
+  const mnemonicWords = walletInfo?.mnemonic ? walletInfo.mnemonic.trim().split(/\s+/) : [];
+
+  const nativePrice = prices.network === network ? prices.native : null;
+  const tokenPrice = (address: string) => (prices.network === network ? prices.tokens[address] : undefined);
+
+  /** 网络费：点击打开编辑面板；原生币转账同时显示合计 */
+  const renderFeeCard = (nativeAmount?: string) => {
+    if (!feeSuggestion || !feeChoice) return null;
+    const fee = formatEther(evmFeeCost(feeChoice.gas, feeSuggestion.baseFee).expected);
+    const feeUsd = formatUsd(usdValue(fee, nativePrice));
+    const total = nativeAmount ? String(Number(nativeAmount) + Number(fee)) : '';
+    const totalUsd = total ? formatUsd(usdValue(total, nativePrice)) : '';
+    return (
+      <div className="card">
+        <button className="fee-row" onClick={() => setFeeEditorOpen(true)}>
+          <span>
+            <span className="k">{tr('Est. network fee', '预估网络费')}</span>
+            <span className="fee-level">
+              {feeLabel(feeChoice.level, lang)} <Icon name="chevron" size={13} />
+            </span>
+          </span>
+          <span className="fee-values">
+            <span className="fee-main">{feeUsd || `${formatAmount(fee, 8)} ${nativeSymbol}`}</span>
+            {feeUsd && <span className="fee-sub">{formatAmount(fee, 8)} {nativeSymbol}</span>}
+          </span>
         </button>
-        <button 
-          onClick={() => switchLang('zh')}
-          style={{
-            padding: '0.25rem 0.5rem',
-            fontSize: '12px',
-            backgroundColor: lang === 'zh' ? '#007bff' : '#e9ecef',
-            color: lang === 'zh' ? 'white' : '#495057',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            transition: 'all 0.2s ease'
-          }}
-        >
-          中文
-        </button>
+        {total && (
+          <div className="kv total">
+            <span className="k">{tr('Total', '合计')}</span>
+            <span className="v">{formatAmount(total, 8)} {nativeSymbol}{totalUsd ? `  ≈ ${totalUsd}` : ''}</span>
+          </div>
+        )}
+        {feeEditorOpen && (
+          <FeeEditor
+            suggestion={feeSuggestion}
+            selected={feeChoice.level}
+            current={feeChoice.gas}
+            symbol={nativeSymbol}
+            price={nativePrice}
+            lang={lang}
+            onSelect={(level, gas) => {
+              setFeeChoice({ level, gas });
+              setFeeEditorOpen(false);
+            }}
+            onClose={() => setFeeEditorOpen(false)}
+          />
+        )}
       </div>
-      
-      {/* 标题 */}
-      <h1 style={{ 
-        margin: '0 0 1.5rem 0', 
-        fontSize: '1.5rem', 
-        fontWeight: '600',
-        color: '#212529',
-        textAlign: 'center'
-      }}>
-        {t('title')}
-      </h1>
-      {view === 'wallet' && (
-        <div style={{ 
-          marginBottom: '1rem',
-          padding: '1rem',
-          backgroundColor: 'white',
-          borderRadius: '8px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          border: '1px solid #e9ecef'
-        }}>
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'space-between',
-            marginBottom: '0.5rem'
-          }}>
-            <label style={{ 
-              fontSize: '0.875rem', 
-              fontWeight: '500',
-              color: '#495057'
-            }}>
-              {t('network')}
-            </label>
-            <button 
-              onClick={() => setView('networks')} 
-              style={{ 
-                fontSize: '0.75rem',
-                padding: '0.25rem 0.5rem',
-                backgroundColor: '#6c757d',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                transition: 'background-color 0.2s ease'
-              }}
-              onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#5a6268'}
-              onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#6c757d'}
-            >
-              {t('settings')}
+    );
+  };
+
+  const usdHint = (value: string, price: number | null | undefined) => {
+    const usd = Number(value) > 0 ? formatUsd(usdValue(value, price)) : '';
+    return usd ? <div className="usd-hint">≈ {usd}</div> : null;
+  };
+
+  const nativeUsd = balanceLoaded ? usdValue(balance, nativePrice) : null;
+  const tokenUsd = (address: string) => usdValue(tokenBalances[address] || '0', tokenPrice(address));
+  // 总价值 = 原生币 + 有报价的代币；没有任何报价时不显示
+  const pricedValues = [nativeUsd, ...tokens.map((x) => tokenUsd(x.address))].filter((v): v is number => v != null);
+  const totalUsd = pricedValues.length ? pricedValues.reduce((a, b) => a + b, 0) : null;
+
+  return (
+    <div className="app">
+      {showHeader && (
+        <header className="header">
+          <div className="brand">
+            <div className="brand-mark">L</div>
+          </div>
+          <div className="network-pill" title={currentNetwork?.name}>
+            {networkLogo(network) ? <img className="net-logo" src={`/logos/${networkLogo(network)}.png`} alt="" /> : <span className="dot" />}
+            <span className="label">{currentNetwork?.name || '—'}</span>
+            <Icon name="chevron" size={14} className="chevron" />
+            <select value={network} onChange={handleNetworkChange} aria-label={t('networks')}>
+              {Object.entries(allNetworks).map(([key, { name }]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="header-actions">
+            <button className="icon-btn" onClick={() => switchLang(lang === 'zh' ? 'en' : 'zh')} title="Language">
+              {lang === 'zh' ? 'EN' : '中'}
+            </button>
+            <button className="icon-btn" onClick={() => setView('networks')} title={t('settings')}>
+              <Icon name="settings" size={16} />
+            </button>
+            {walletInfo && (
+              <button className="icon-btn" onClick={logout} title={t('logout')}>
+                <Icon name="lock" size={16} />
+              </button>
+            )}
+          </div>
+        </header>
+      )}
+
+      {view === 'home' && (
+        <div className="page">
+          <div className="row" style={{ justifyContent: 'flex-end', flex: 'none' }}>
+            <button className="icon-btn" style={{ flex: 'none' }} onClick={() => switchLang(lang === 'zh' ? 'en' : 'zh')}>
+              {lang === 'zh' ? 'EN' : '中'}
             </button>
           </div>
-          <select 
-            value={network} 
-            onChange={handleNetworkChange} 
-            style={{ 
-              width: '100%',
-              padding: '0.5rem',
-              border: '1px solid #ced4da',
-              borderRadius: '4px',
-              fontSize: '0.875rem',
-              backgroundColor: 'white',
-              cursor: 'pointer'
-            }}
-          >
-            {Object.entries(allNetworks).map(([key, { name }]) => (
-              <option key={key} value={key}>{name}</option>
-            ))}
-          </select>
+          <div className="hero">
+            <div className="hero-logo">L</div>
+            <h1>LuckYou Wallet</h1>
+            <p>{tr('Your secure gateway to Web3', '安全、简单的 Web3 钱包')}</p>
+          </div>
+          <div className="spacer" />
+          <div className="stack">
+            <button className="btn btn-primary" onClick={handleCreate}>
+              <Icon name="plus" /> {t('createWallet')}
+            </button>
+            <button className="btn btn-secondary" onClick={() => setView('import')}>
+              <Icon name="arrowDown" /> {t('importWallet')}
+            </button>
+          </div>
+          <p className="center text-muted" style={{ fontSize: 12, margin: 0 }}>
+            {tr('Keys are encrypted and never leave your device', '私钥加密存储，永不离开你的设备')}
+          </p>
         </div>
       )}
-      {view === 'home' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <button 
-            onClick={handleCreate}
-            style={{
-              padding: '1rem',
-              fontSize: '1rem',
-              fontWeight: '500',
-              backgroundColor: '#007bff',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-            }}
-            onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#0056b3'}
-            onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#007bff'}
-          >
-            {t('createWallet')}
-          </button>
-          <button 
-            onClick={() => setView('import')}
-            style={{
-              padding: '1rem',
-              fontSize: '1rem',
-              fontWeight: '500',
-              backgroundColor: '#6c757d',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-            }}
-            onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#5a6268'}
-            onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#6c757d'}
-          >
-            {t('importWallet')}
-          </button>
-        </div>
-      )}
+
       {view === 'import' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* 导入方式选择 */}
-          <div style={{ 
-            display: 'flex', 
-            gap: '0.5rem', 
-            marginBottom: '0.5rem' 
-          }}>
-            <button 
-              onClick={() => setImportMethod('mnemonic')}
-              style={{ 
-                flex: 1, 
-                backgroundColor: importMethod === 'mnemonic' ? '#007bff' : '#f8f9fa',
-                color: importMethod === 'mnemonic' ? 'white' : '#495057',
-                border: '1px solid #dee2e6',
-                padding: '0.75rem',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                transition: 'all 0.2s ease'
-              }}
-              onMouseOver={(e) => {
-                if (importMethod !== 'mnemonic') {
-                  (e.target as HTMLElement).style.backgroundColor = '#e9ecef';
-                }
-              }}
-              onMouseOut={(e) => {
-                if (importMethod !== 'mnemonic') {
-                  (e.target as HTMLElement).style.backgroundColor = '#f8f9fa';
-                }
-              }}
-            >
+        <div className="page">
+          <PageHeader title={t('importWallet')} onBack={backHome} />
+          <div className="segmented">
+            <button className={importMethod === 'mnemonic' ? 'active' : ''} onClick={() => setImportMethod('mnemonic')}>
               {t('mnemonic')}
             </button>
-            <button 
-              onClick={() => setImportMethod('privateKey')}
-              style={{ 
-                flex: 1, 
-                backgroundColor: importMethod === 'privateKey' ? '#007bff' : '#f8f9fa',
-                color: importMethod === 'privateKey' ? 'white' : '#495057',
-                border: '1px solid #dee2e6',
-                padding: '0.75rem',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                transition: 'all 0.2s ease'
-              }}
-              onMouseOver={(e) => {
-                if (importMethod !== 'privateKey') {
-                  (e.target as HTMLElement).style.backgroundColor = '#e9ecef';
-                }
-              }}
-              onMouseOut={(e) => {
-                if (importMethod !== 'privateKey') {
-                  (e.target as HTMLElement).style.backgroundColor = '#f8f9fa';
-                }
-              }}
-            >
+            <button className={importMethod === 'privateKey' ? 'active' : ''} onClick={() => setImportMethod('privateKey')}>
               {t('privateKey')}
             </button>
           </div>
-          
-          {/* 输入框 */}
           {importMethod === 'mnemonic' ? (
-            <textarea
-              placeholder={lang === 'zh' ? "输入助记词 (12, 15, 18, 21, 或 24 个单词)" : "Enter mnemonic phrase (12, 15, 18, 21, or 24 words)"}
-              value={inputMnemonic}
-              onChange={(e) => setInputMnemonic(e.target.value)}
-              style={{ 
-                width: '100%', 
-                minHeight: '100px', 
-                padding: '0.75rem',
-                border: '1px solid #ced4da',
-                borderRadius: '6px',
-                fontSize: '0.875rem',
-                fontFamily: 'monospace',
-                resize: 'vertical'
-              }}
-            />
-          ) : (
-            <input
-              type="password"
-              placeholder={lang === 'zh' ? "输入私钥 (64 位十六进制字符)" : "Enter private key (64 hex characters)"}
-              value={inputPrivateKey}
-              onChange={(e) => setInputPrivateKey(e.target.value)}
-              style={{ 
-                width: '100%', 
-                padding: '0.75rem',
-                border: '1px solid #ced4da',
-                borderRadius: '6px',
-                fontSize: '0.875rem',
-                fontFamily: 'monospace'
-              }}
-            />
-          )}
-          
-          {/* 操作按钮 */}
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button 
-              onClick={handleImport}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                backgroundColor: '#28a745',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                transition: 'background-color 0.2s ease'
-              }}
-              onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#218838'}
-              onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#28a745'}
-            >
-              {t('import')}
-            </button>
-            <button 
-              onClick={backHome}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                backgroundColor: '#6c757d',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                transition: 'background-color 0.2s ease'
-              }}
-              onMouseOver={(e) => (e.target as HTMLElement).style.backgroundColor = '#5a6268'}
-              onMouseOut={(e) => (e.target as HTMLElement).style.backgroundColor = '#6c757d'}
-            >
-              {t('cancel')}
-            </button>
-          </div>
-        </div>
-      )}
-      {view === 'setPassword' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {source === 'created' && walletInfo?.mnemonic && (
-            <p><strong>Mnemonic:</strong> {walletInfo.mnemonic}</p>
-          )}
-          <p><strong>Address:</strong> {walletInfo?.address}</p>
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <input
-            type="password"
-            placeholder="Confirm Password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-          />
-          <button onClick={handleSetPassword}>{t('save')}</button>
-          <button onClick={backHome}>{t('cancel')}</button>
-        </div>
-      )}
-      {view === 'unlock' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <input
-            type="password"
-            placeholder="Password"
-            value={unlockPassword}
-            onChange={(e) => setUnlockPassword(e.target.value)}
-          />
-          <button onClick={handleUnlock}>{t('unlock')}</button>
-          <button onClick={clearWallet}>{t('clearWallet')}</button>
-        </div>
-      )}
-      {view === 'wallet' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* 钱包信息卡片 */}
-          <div style={{ 
-            padding: '1rem',
-            backgroundColor: 'white',
-            borderRadius: '8px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            border: '1px solid #e9ecef'
-          }}>
-            {source === 'created' && walletInfo?.mnemonic && (
-              <div style={{ 
-                marginBottom: '1rem',
-                padding: '0.75rem',
-                backgroundColor: '#fff3cd',
-                border: '1px solid #ffeaa7',
-                borderRadius: '4px'
-              }}>
-                <div style={{ 
-                  fontSize: '0.875rem', 
-                  fontWeight: '500',
-                  color: '#856404',
-                  marginBottom: '0.5rem'
-                }}>
-                  {t('mnemonic')}:
-                </div>
-                <div style={{ 
-                  fontSize: '0.75rem',
-                  color: '#856404',
-                  wordBreak: 'break-all',
-                  fontFamily: 'monospace'
-                }}>
-                  {walletInfo.mnemonic}
-                </div>
-              </div>
-            )}
-            
-            {/* 地址信息 */}
-            <div style={{ marginBottom: '1rem' }}>
-              <div style={{ 
-                fontSize: '0.875rem', 
-                fontWeight: '500',
-                color: '#495057',
-                marginBottom: '0.5rem'
-              }}>
-                {t('address')}:
-              </div>
-              <div style={{ 
-                fontSize: '0.75rem',
-                color: '#6c757d',
-                wordBreak: 'break-all',
-                fontFamily: 'monospace',
-                padding: '0.5rem',
-                backgroundColor: '#f8f9fa',
-                borderRadius: '4px',
-                border: '1px solid #e9ecef'
-              }}>
-                {walletInfo?.address}
-              </div>
+            <div className="field">
+              <label className="field-label">{tr('Secret recovery phrase', '助记词')}</label>
+              <textarea
+                className="textarea"
+                placeholder={tr('Enter 12, 15, 18, 21 or 24 words separated by spaces', '输入 12/15/18/21/24 个单词，用空格分隔')}
+                value={inputMnemonic}
+                onChange={(e) => setInputMnemonic(e.target.value)}
+                autoFocus
+              />
             </div>
-            
-            {/* 余额信息 */}
-            <div>
-              <div style={{ 
-                fontSize: '0.875rem', 
-                fontWeight: '500',
-                color: '#495057',
-                marginBottom: '0.5rem'
-              }}>
-                {t('balance')}:
+          ) : (
+            <div className="field">
+              <label className="field-label">{t('privateKey')}</label>
+              <input
+                className="input mono"
+                type="password"
+                placeholder={tr('64 hex characters', '64 位十六进制字符')}
+                value={inputPrivateKey}
+                onChange={(e) => setInputPrivateKey(e.target.value)}
+                autoFocus
+              />
+            </div>
+          )}
+          <div className="alert alert-info">
+            <Icon name="shield" size={16} />
+            <span>{tr('Never share your recovery phrase or private key with anyone.', '切勿向任何人透露你的助记词或私钥。')}</span>
+          </div>
+          <div className="spacer" />
+          <button
+            className="btn btn-primary"
+            onClick={handleImport}
+            disabled={importMethod === 'mnemonic' ? !inputMnemonic.trim() : !inputPrivateKey.trim()}
+          >
+            {t('import')}
+          </button>
+        </div>
+      )}
+
+      {view === 'setPassword' && (
+        <div className="page">
+          <PageHeader title={source === 'created' ? tr('Back up & secure', '备份并设置密码') : tr('Set password', '设置密码')} onBack={backHome} />
+          {source === 'created' && mnemonicWords.length > 0 && (
+            <>
+              <div className="alert alert-warning">
+                <Icon name="warning" size={16} />
+                <span>{tr('Write these words down in order and store them offline. Anyone with them can take your funds.', '请按顺序抄写这些单词并离线保存。任何获得它们的人都可以转走你的资产。')}</span>
               </div>
-              <div style={{ 
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between'
-              }}>
-                <div style={{ 
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  color: balanceLoaded ? '#28a745' : '#6c757d'
-                }}>
-                  {balanceLoading ? (
-                    <span style={{ color: '#007bff' }}>
-                      {lang === 'zh' ? '加载中...' : 'Loading...'}
+              <div className={`mnemonic-grid ${mnemonicRevealed ? '' : 'blurred'}`}>
+                {mnemonicWords.map((word, i) => (
+                  <div className="mnemonic-word" key={i}>
+                    <span className="n">{i + 1}</span>
+                    <span>{word}</span>
+                  </div>
+                ))}
+                {!mnemonicRevealed && (
+                  <button className="reveal-overlay" onClick={() => setMnemonicRevealed(true)}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Icon name="eye" size={16} /> {tr('Click to reveal', '点击显示')}
                     </span>
-                  ) : balanceLoaded ? (
-                    <span>{balance} ETH</span>
-                  ) : (
-                    <span style={{ color: '#6c757d' }}>
-                      {lang === 'zh' ? '未加载' : 'Not loaded'}
-                    </span>
-                  )}
-                </div>
-                {walletInfo?.address && (
-                  <button 
-                    onClick={() => loadBalance(walletInfo.address, network, true)}
-                    disabled={balanceLoading}
-                    style={{ 
-                      fontSize: '0.75rem',
-                      padding: '0.375rem 0.75rem',
-                      backgroundColor: balanceLoading ? '#6c757d' : '#28a745',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: balanceLoading ? 'not-allowed' : 'pointer',
-                      transition: 'background-color 0.2s ease'
-                    }}
-                    onMouseOver={(e) => {
-                      if (!balanceLoading) {
-                        (e.target as HTMLElement).style.backgroundColor = '#218838';
-                      }
-                    }}
-                    onMouseOut={(e) => {
-                      if (!balanceLoading) {
-                        (e.target as HTMLElement).style.backgroundColor = '#28a745';
-                      }
-                    }}
-                  >
-                    {balanceLoading ? 
-                      (lang === 'zh' ? '刷新中...' : 'Refreshing...') : 
-                      (lang === 'zh' ? '刷新' : 'Refresh')
-                    }
                   </button>
                 )}
               </div>
-            </div>
-          </div>
-      {tokens.length > 0 && (
-        <div>
-          <p><strong>{t('tokens')}</strong></p>
-          {tokens.map((token) => (
-            <button
-              key={token.address}
-              onClick={() => {
-                setSelectedToken(token);
-                setView('tokenDetail');
-              }}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                padding: '0.5rem',
-                width: '100%',
-                border: '1px solid #eee',
-                background: '#fff',
-                cursor: 'pointer',
-                borderRadius: 6,
-                marginBottom: 6,
-              }}
-            >
-              <span>{token.symbol}</span>
-              <span>{tokenBalances[token.address] || '0'}</span>
-            </button>
-          ))}
-        </div>
-      )}
-             <button onClick={() => setView('addToken')}>{t('addToken')}</button>
-       <button onClick={() => setView('send')}>{t('sendETH')}</button>
-       <button onClick={() => setView('activity')}>{t('activity')}</button>
-       <button onClick={logout}>{t('logout')}</button>
-    </div>
-  )}
-  {view === 'send' && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <input
-        placeholder="Recipient Address"
-        value={toAddress}
-        onChange={(e) => setToAddress(e.target.value)}
-      />
-      <input
-        placeholder="Amount (ETH)"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-      />
-      <button onClick={handleSend} disabled={sending}>{t('send')}</button>
-      {sending && <p>{t('sending')}</p>}
-      <button onClick={() => setView('wallet')}>{t('cancel')}</button>
-    </div>
-  )}
-      {view === 'addToken' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <input
-            placeholder={t('tokenAddress')}
-            value={tokenAddress}
-            onChange={(e) => setTokenAddress(e.target.value.trim())}
-          />
-          {tokenMetaLoading && <p>{t('loading')}</p>}
-          {tokenMetaError && <p style={{ color: 'red' }}>{tokenMetaError}</p>}
-          {preview ? (
-            <div style={{ background: '#f6f6f6', padding: '0.5rem', borderRadius: 6 }}>
-              <div><strong>{preview.symbol}</strong> · {preview.name} · decimals: {preview.decimals}</div>
-            </div>
-          ) : (
-            <>
-              <input
-                placeholder={t('tokenSymbol')}
-                value={manualSymbol}
-                onChange={(e) => setManualSymbol(e.target.value)}
-              />
-              <input
-                placeholder={t('tokenDecimals')}
-                value={manualDecimals}
-                onChange={(e) => setManualDecimals(e.target.value)}
-                inputMode="numeric"
-              />
+              <label className="checkbox">
+                <input type="checkbox" checked={backupConfirmed} onChange={(e) => setBackupConfirmed(e.target.checked)} />
+                <span>{tr('I have safely backed up my recovery phrase', '我已安全备份助记词')}</span>
+              </label>
             </>
           )}
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button onClick={handleAddToken} disabled={!tokenAddress}>{t('add')}</button>
-            <button onClick={() => setView('wallet')}>{t('cancel')}</button>
-          </div>
-        </div>
-      )}
-      {view === 'sendToken' && selectedToken && walletInfo && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <div>
-            <strong>{selectedToken.symbol}</strong> · {tokenBalances[selectedToken.address] || '0'}
-          </div>
-          <input
-            placeholder="Recipient Address"
-            value={sendTokenTo}
-            onChange={(e) => setSendTokenTo(e.target.value)}
-          />
-          <input
-            placeholder={`Amount (${selectedToken.symbol})`}
-            value={sendTokenAmount}
-            onChange={(e) => setSendTokenAmount(e.target.value)}
-          />
-          <button
-            onClick={async () => {
-              if (!walletInfo || !selectedToken) return;
-              
-              // 设置待确认的代币交易
-              setPendingTransaction({
-                type: 'token',
-                to: sendTokenTo,
-                amount: sendTokenAmount,
-                token: selectedToken,
-              });
-              
-              // 预估 Gas 费用
-              setGasEstimating(true);
-              try {
-                const { estimateGasForToken } = await import('../core/wallet');
-                const estimate = await estimateGasForToken(walletInfo.address, selectedToken, sendTokenTo, sendTokenAmount, network);
-                setGasEstimate(estimate);
-                setView('confirmTokenTransaction');
-              } catch (e) {
-                alert('Failed to estimate gas');
-                setPendingTransaction(null);
-              } finally {
-                setGasEstimating(false);
-              }
-            }}
-            disabled={sendingToken}
-          >
-            {t('send')}
-          </button>
-          {sendingToken && <p>{t('sending')}</p>}
-          <button onClick={() => setView('tokenDetail')}>{t('cancel')}</button>
-        </div>
-      )}
-      {view === 'tokenDetail' && selectedToken && walletInfo && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <button onClick={() => setView('wallet')}>{t('back')}</button>
-          <h3>{selectedToken.symbol}</h3>
-          <div><strong>Address:</strong> {selectedToken.address}</div>
-          <div><strong>Balance:</strong> {tokenBalances[selectedToken.address] || '0'}</div>
-          <div><strong>Decimals:</strong> {selectedToken.decimals}</div>
-          <div><strong>Name:</strong> {selectedToken.name}</div>
-          <button onClick={() => setView('sendToken')}>{t('send')}</button>
-          <div>
-            <p><strong>{t('activity')}</strong></p>
-            {selectedTokenHistory.length === 0 ? (
-              <p>{t('noTransactions')}</p>
-            ) : (
-              <ul style={{ maxHeight: '150px', overflowY: 'auto', paddingLeft: '1rem' }}>
-                {selectedTokenHistory.map((r) => (
-                  <li key={r.hash}>
-                    <button
-                      onClick={() => {
-                        const base = network === 'mainnet'
-                          ? 'https://etherscan.io/tx/'
-                          : network === 'sepolia'
-                          ? 'https://sepolia.etherscan.io/tx/'
-                          : 'https://polygonscan.com/tx/';
-                        window.open(base + r.hash, '_blank');
-                      }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}
-                      title={r.hash}
-                    >
-                      {r.from.toLowerCase() === walletInfo.address.toLowerCase()
-                        ? `Sent ${r.value} ${selectedToken.symbol} to ${r.to}`
-                        : `Received ${r.value} ${selectedToken.symbol} from ${r.from}`}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
-  {view === 'activity' && walletInfo && (
-    <Activity
-      records={history}
-      wallet={walletInfo}
-      onBack={() => setView('wallet')}
-      t={t}
-    />
-  )}
-  {view === 'networks' && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h3>{t('networks')}</h3>
-        <button onClick={() => setView('wallet')}>{t('back')}</button>
-      </div>
-      <NetworkManager
-        onNetworkChange={handleNetworkManagerChange}
-        currentNetwork={network}
-        lang={lang}
-      />
-    </div>
-  )}
-  {view === 'confirmEthTransaction' && pendingTransaction && gasEstimate && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <h3>{t('confirmTransaction')}</h3>
-      <div style={{ background: '#f6f6f6', padding: '0.5rem', borderRadius: 6 }}>
-        <div><strong>{t('transactionDetails')}</strong></div>
-        <div>{t('to')}: {pendingTransaction.to}</div>
-        <div>{t('value')}: {pendingTransaction.amount} ETH</div>
-      </div>
-      <div style={{ background: '#f6f6f6', padding: '0.5rem', borderRadius: 6 }}>
-        <div><strong>{t('gasEstimate')}</strong></div>
-        <div>{t('gasLimit')}: {gasEstimate.gasLimit}</div>
-        <div>{t('gasPrice')}: {gasEstimate.gasPrice} ETH</div>
-        <div>{t('maxFeePerGas')}: {gasEstimate.maxFeePerGas} ETH</div>
-        <div>{t('maxPriorityFeePerGas')}: {gasEstimate.maxPriorityFeePerGas} ETH</div>
-        <div><strong>{t('totalCost')}: {gasEstimate.totalCost} ETH</strong></div>
-      </div>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <button onClick={handleConfirmEthTransaction} disabled={sending}>
-          {sending ? t('sending') : t('confirm')}
-        </button>
-        <button onClick={() => {
-          setView('send');
-          setPendingTransaction(null);
-          setGasEstimate(null);
-        }}>
-          {t('reject')}
-        </button>
-      </div>
-    </div>
-  )}
-  {view === 'confirmTokenTransaction' && pendingTransaction && gasEstimate && pendingTransaction.token && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <h3>{t('confirmTransaction')}</h3>
-      <div style={{ background: '#f6f6f6', padding: '0.5rem', borderRadius: 6 }}>
-        <div><strong>{t('transactionDetails')}</strong></div>
-        <div>{t('to')}: {pendingTransaction.to}</div>
-        <div>{t('value')}: {pendingTransaction.amount} {pendingTransaction.token.symbol}</div>
-        <div>Token: {pendingTransaction.token.name} ({pendingTransaction.token.symbol})</div>
-      </div>
-      <div style={{ background: '#f6f6f6', padding: '0.5rem', borderRadius: 6 }}>
-        <div><strong>{t('gasEstimate')}</strong></div>
-        <div>{t('gasLimit')}: {gasEstimate.gasLimit}</div>
-        <div>{t('gasPrice')}: {gasEstimate.gasPrice} ETH</div>
-        <div>{t('maxFeePerGas')}: {gasEstimate.maxFeePerGas} ETH</div>
-        <div>{t('maxPriorityFeePerGas')}: {gasEstimate.maxPriorityFeePerGas} ETH</div>
-        <div><strong>{t('totalCost')}: {gasEstimate.totalCost} ETH</strong></div>
-      </div>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <button onClick={handleConfirmTokenTransaction} disabled={sendingToken}>
-          {sendingToken ? t('sending') : t('confirm')}
-        </button>
-        <button onClick={() => {
-          setView('sendToken');
-          setPendingTransaction(null);
-          setGasEstimate(null);
-        }}>
-          {t('reject')}
-        </button>
-      </div>
-    </div>
-  )}
-  
-  {/* 授权界面 */}
-  {view === 'authorize' && pendingAuth && (
-    <div style={{ 
-      padding: '1.5rem', 
-      width: 360, 
-      minHeight: 500,
-      backgroundColor: '#f8f9fa',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      fontSize: '14px',
-      lineHeight: 1.5,
-      color: '#333'
-    }}>
-      <h2 style={{ 
-        margin: '0 0 1.5rem 0', 
-        fontSize: '1.25rem', 
-        fontWeight: '600',
-        color: '#212529',
-        textAlign: 'center'
-      }}>
-        {lang === 'zh' ? '连接请求' : 'Connection Request'}
-      </h2>
-      
-      <div style={{ 
-        marginBottom: '1.5rem',
-        padding: '1rem',
-        backgroundColor: 'white',
-        borderRadius: '8px',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-        border: '1px solid #e9ecef'
-      }}>
-        <div style={{ 
-          fontSize: '0.875rem', 
-          fontWeight: '500',
-          color: '#495057',
-          marginBottom: '0.5rem'
-        }}>
-          {lang === 'zh' ? '网站' : 'Site'}:
-        </div>
-        <div style={{ 
-          fontSize: '0.875rem',
-          color: '#007bff',
-          fontWeight: '500'
-        }}>
-          {currentSite}
-        </div>
-      </div>
-      
-      <div style={{ 
-        marginBottom: '1.5rem',
-        padding: '1rem',
-        backgroundColor: 'white',
-        borderRadius: '8px',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-        border: '1px solid #e9ecef'
-      }}>
-        <div style={{ 
-          fontSize: '0.875rem', 
-          fontWeight: '500',
-          color: '#495057',
-          marginBottom: '0.5rem'
-        }}>
-          {lang === 'zh' ? '钱包地址' : 'Wallet Address'}:
-        </div>
-        <div style={{ 
-          fontSize: '0.75rem',
-          color: '#6c757d',
-          wordBreak: 'break-all',
-          fontFamily: 'monospace',
-          padding: '0.5rem',
-          backgroundColor: '#f8f9fa',
-          borderRadius: '4px',
-          border: '1px solid #e9ecef'
-        }}>
-          {walletInfo?.address}
-        </div>
-      </div>
-      
-      <div style={{ 
-        fontSize: '0.875rem',
-        color: '#6c757d',
-        marginBottom: '1.5rem',
-        textAlign: 'center'
-      }}>
-        {lang === 'zh' ? 
-          '此网站想要连接到您的钱包。请确认您信任此网站。' : 
-          'This site wants to connect to your wallet. Please confirm you trust this site.'
-        }
-      </div>
-      
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
-        <button 
-          onClick={() => handleAuthorize(false)}
-          style={{ 
-            flex: 1,
-            padding: '0.75rem',
-            backgroundColor: '#6c757d',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '0.875rem',
-            fontWeight: '500',
-            transition: 'background-color 0.2s ease'
-          }}
-          onMouseOver={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#5a6268';
-          }}
-          onMouseOut={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
-          }}
-        >
-          {lang === 'zh' ? '拒绝' : 'Reject'}
-        </button>
-        <button 
-          onClick={() => handleAuthorize(true)}
-          style={{ 
-            flex: 1,
-            padding: '0.75rem',
-            backgroundColor: '#28a745',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '0.875rem',
-            fontWeight: '500',
-            transition: 'background-color 0.2s ease'
-          }}
-          onMouseOver={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#218838';
-          }}
-          onMouseOut={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#28a745';
-          }}
-        >
-          {lang === 'zh' ? '连接' : 'Connect'}
-        </button>
-      </div>
-      
-      {/* 返回按钮 */}
-      <div style={{ textAlign: 'center' }}>
-        <button 
-          onClick={() => {
-            // 清理待处理请求
-            chrome.storage.local.remove('pendingAuth').catch(console.error);
-            setPendingAuth(null);
-            
-            // 根据钱包状态决定跳转页面
-            if (walletInfo) {
-              setView('wallet');
-            } else {
-              setView('home');
-            }
-          }}
-          style={{ 
-            padding: '0.5rem 1rem',
-            backgroundColor: 'transparent',
-            color: '#6c757d',
-            border: '1px solid #6c757d',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '0.875rem',
-            fontWeight: '500',
-            transition: 'all 0.2s ease'
-          }}
-          onMouseOver={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
-            (e.target as HTMLElement).style.color = 'white';
-          }}
-          onMouseOut={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = 'transparent';
-            (e.target as HTMLElement).style.color = '#6c757d';
-          }}
-        >
-          {lang === 'zh' ? '返回' : 'Back'}
-        </button>
-      </div>
-    </div>
-  )}
-  
-  {/* 签名界面 */}
-  {view === 'signTransaction' && pendingSignature && (
-    <div style={{ 
-      padding: '1.5rem', 
-      width: 360, 
-      minHeight: 500,
-      backgroundColor: '#f8f9fa',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      fontSize: '14px',
-      lineHeight: 1.5,
-      color: '#333'
-    }}>
-      <h2 style={{ 
-        margin: '0 0 1.5rem 0', 
-        fontSize: '1.25rem', 
-        fontWeight: '600',
-        color: '#212529',
-        textAlign: 'center'
-      }}>
-        {lang === 'zh' ? '签名请求' : 'Signature Request'}
-      </h2>
-      
-      <div style={{ 
-        marginBottom: '1.5rem',
-        padding: '1rem',
-        backgroundColor: 'white',
-        borderRadius: '8px',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-        border: '1px solid #e9ecef'
-      }}>
-        <div style={{ 
-          fontSize: '0.875rem', 
-          fontWeight: '500',
-          color: '#495057',
-          marginBottom: '0.5rem'
-        }}>
-          {lang === 'zh' ? '请求类型' : 'Request Type'}:
-        </div>
-        <div style={{ 
-          fontSize: '0.875rem',
-          color: '#007bff',
-          fontWeight: '500'
-        }}>
-          {pendingSignature.request.method}
-        </div>
-      </div>
-      
-      {pendingSignature.request.method === 'eth_sendTransaction' && (
-        <div style={{ 
-          marginBottom: '1.5rem',
-          padding: '1rem',
-          backgroundColor: 'white',
-          borderRadius: '8px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          border: '1px solid #e9ecef'
-        }}>
-          <div style={{ 
-            fontSize: '0.875rem', 
-            fontWeight: '500',
-            color: '#495057',
-            marginBottom: '0.5rem'
-          }}>
-            {lang === 'zh' ? '交易详情' : 'Transaction Details'}:
-          </div>
-          <div style={{ fontSize: '0.75rem', color: '#6c757d' }}>
-            <div><strong>{lang === 'zh' ? '接收地址' : 'To'}:</strong> {pendingSignature.request.params[0].to}</div>
-            <div><strong>{lang === 'zh' ? '金额' : 'Value'}:</strong> {pendingSignature.request.params[0].value || '0'} wei</div>
-            <div><strong>{lang === 'zh' ? 'Gas限制' : 'Gas Limit'}:</strong> {pendingSignature.request.params[0].gasLimit || 'Auto'}</div>
-          </div>
-        </div>
-      )}
-      
-      {pendingSignature.request.method === 'personal_sign' && (
-        <div style={{ 
-          marginBottom: '1.5rem',
-          padding: '1rem',
-          backgroundColor: 'white',
-          borderRadius: '8px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          border: '1px solid #e9ecef'
-        }}>
-          <div style={{ 
-            fontSize: '0.875rem', 
-            fontWeight: '500',
-            color: '#495057',
-            marginBottom: '0.5rem'
-          }}>
-            {lang === 'zh' ? '消息内容' : 'Message'}:
-          </div>
-          <div style={{ 
-            fontSize: '0.75rem',
-            color: '#6c757d',
-            wordBreak: 'break-all',
-            fontFamily: 'monospace',
-            padding: '0.5rem',
-            backgroundColor: '#f8f9fa',
-            borderRadius: '4px',
-            border: '1px solid #e9ecef',
-            maxHeight: '100px',
-            overflow: 'auto'
-          }}>
-            {pendingSignature.request.params[0]}
-          </div>
-        </div>
-      )}
-      
-      <div style={{ 
-        fontSize: '0.875rem',
-        color: '#6c757d',
-        marginBottom: '1.5rem',
-        textAlign: 'center'
-      }}>
-        {lang === 'zh' ? 
-          '请仔细检查交易详情，确认无误后点击签名。' : 
-          'Please carefully review the transaction details before signing.'
-        }
-      </div>
-      
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
-        <button 
-          onClick={() => handleSignTransaction(false)}
-          disabled={isSigningPending}
-          style={{ 
-            flex: 1,
-            padding: '0.75rem',
-            backgroundColor: isSigningPending ? '#adb5bd' : '#6c757d',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: isSigningPending ? 'not-allowed' : 'pointer',
-            fontSize: '0.875rem',
-            fontWeight: '500',
-            transition: 'background-color 0.2s ease',
-            opacity: isSigningPending ? 0.6 : 1
-          }}
-          onMouseOver={(e) => {
-            if (!isSigningPending) {
-              (e.target as HTMLElement).style.backgroundColor = '#5a6268';
-            }
-          }}
-          onMouseOut={(e) => {
-            if (!isSigningPending) {
-              (e.target as HTMLElement).style.backgroundColor = '#6c757d';
-            }
-          }}
-        >
-          {lang === 'zh' ? '拒绝' : 'Reject'}
-        </button>
-        <button 
-          onClick={() => handleSignTransaction(true)}
-          disabled={isSigningPending}
-          style={{ 
-            flex: 1,
-            padding: '0.75rem',
-            backgroundColor: isSigningPending ? '#28a745' : '#28a745',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: isSigningPending ? 'not-allowed' : 'pointer',
-            fontSize: '0.875rem',
-            fontWeight: '500',
-            transition: 'background-color 0.2s ease',
-            opacity: isSigningPending ? 0.8 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px'
-          }}
-          onMouseOver={(e) => {
-            if (!isSigningPending) {
-              (e.target as HTMLElement).style.backgroundColor = '#218838';
-            }
-          }}
-          onMouseOut={(e) => {
-            if (!isSigningPending) {
-              (e.target as HTMLElement).style.backgroundColor = '#28a745';
-            }
-          }}
-        >
-          {isSigningPending && (
-            <div style={{
-              width: '16px',
-              height: '16px',
-              border: '2px solid rgba(255, 255, 255, 0.3)',
-              borderTop: '2px solid white',
-              borderRadius: '50%',
-              animation: 'spin 1s linear infinite'
-            }} />
+          {source !== 'created' && walletInfo?.address && (
+            <div className="card">
+              <p className="card-title">{t('address')}</p>
+              <div className="mono" style={{ fontSize: 12, wordBreak: 'break-all' }}>{walletInfo.address}</div>
+            </div>
           )}
-          {isSigningPending 
-            ? (lang === 'zh' ? '签名中...' : 'Signing...') 
-            : (lang === 'zh' ? '签名' : 'Sign')
-          }
-        </button>
-      </div>
-      
-      {/* 返回按钮 */}
-      <div style={{ textAlign: 'center' }}>
-        <button 
-          onClick={() => setView('wallet')}
-          style={{ 
-            padding: '0.5rem 1rem',
-            backgroundColor: 'transparent',
-            color: '#6c757d',
-            border: '1px solid #6c757d',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '0.875rem',
-            fontWeight: '500',
-            transition: 'all 0.2s ease'
-          }}
-          onMouseOver={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = '#6c757d';
-            (e.target as HTMLElement).style.color = 'white';
-          }}
-          onMouseOut={(e) => {
-            (e.target as HTMLElement).style.backgroundColor = 'transparent';
-            (e.target as HTMLElement).style.color = '#6c757d';
-          }}
-        >
-          {lang === 'zh' ? '返回' : 'Back'}
-        </button>
-      </div>
+          <div className="field">
+            <label className="field-label">{tr('Password', '密码')}</label>
+            <input
+              className="input"
+              type="password"
+              placeholder={tr('At least 8 characters', '至少 8 位')}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label className="field-label">{tr('Confirm password', '确认密码')}</label>
+            <input
+              className="input"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSetPassword()}
+            />
+          </div>
+          {confirmPassword && password !== confirmPassword && (
+            <span className="text-danger">{tr('Passwords do not match', '两次密码不一致')}</span>
+          )}
+          <div className="spacer" />
+          <button
+            className="btn btn-primary"
+            onClick={handleSetPassword}
+            disabled={password.length < 8 || password !== confirmPassword || (source === 'created' && !backupConfirmed)}
+          >
+            {tr('Create wallet', '完成')}
+          </button>
+        </div>
+      )}
+
+      {view === 'unlock' && (
+        <div className="page">
+          <div className="row" style={{ justifyContent: 'flex-end', flex: 'none' }}>
+            <button className="icon-btn" style={{ flex: 'none' }} onClick={() => switchLang(lang === 'zh' ? 'en' : 'zh')}>
+              {lang === 'zh' ? 'EN' : '中'}
+            </button>
+          </div>
+          <div className="hero">
+            <div className="hero-logo">L</div>
+            <h1>{tr('Welcome back', '欢迎回来')}</h1>
+            <p>{tr('Enter your password to unlock', '输入密码解锁钱包')}</p>
+          </div>
+          <div className="spacer" />
+          <input
+            className="input"
+            type="password"
+            placeholder={tr('Password', '密码')}
+            value={unlockPassword}
+            onChange={(e) => setUnlockPassword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
+            autoFocus
+          />
+          <button className="btn btn-primary" onClick={handleUnlock} disabled={!unlockPassword}>
+            <Icon name="lock" size={16} /> {t('unlock')}
+          </button>
+          <button
+            className="btn btn-link"
+            onClick={() => {
+              if (window.confirm(tr(
+                'This removes the wallet from this browser. You can only restore it with your recovery phrase. Continue?',
+                '这将从浏览器中删除钱包，只能通过助记词恢复。确定继续？'
+              ))) clearWallet();
+            }}
+          >
+            {tr('Forgot password? Reset wallet', '忘记密码？重置钱包')}
+          </button>
+        </div>
+      )}
+
+      {view === 'wallet' && (
+        <div className="page">
+          <div className="balance-card">
+            <div className="balance-top">
+              <button className="address-chip" onClick={() => walletInfo && copyText(walletInfo.address)}>
+                {shortAddress(walletInfo?.address)} <Icon name="copy" size={12} />
+              </button>
+              {walletInfo?.address && (
+                <button
+                  className="icon-btn"
+                  onClick={() => loadBalance(walletInfo.address, network, true)}
+                  disabled={balanceLoading}
+                  title={tr('Refresh', '刷新')}
+                >
+                  <Icon name="refresh" size={15} className={balanceLoading ? 'spin' : ''} />
+                </button>
+              )}
+            </div>
+            <div className="balance-label">{t('balance')}</div>
+            <div className="balance-amount">
+              {balanceLoaded ? formatAmount(balance) : balanceLoading ? '···' : '—'}
+              <span className="sym">{nativeSymbol}</span>
+            </div>
+            {totalUsd != null && <div className="balance-usd">{tr('Total value', '总价值')} {formatUsd(totalUsd)}</div>}
+          </div>
+
+          <div className="actions">
+            <button className="action" onClick={() => setView('send')}>
+              <span className="action-icon"><Icon name="send" /></span>
+              {t('send')}
+            </button>
+            <button className="action" onClick={() => setView('receive')}>
+              <span className="action-icon"><Icon name="receive" /></span>
+              {tr('Receive', '收款')}
+            </button>
+            <button className="action" onClick={() => setView('activity')}>
+              <span className="action-icon"><Icon name="activity" /></span>
+              {t('activity')}
+            </button>
+            <button className="action" onClick={() => setView('addToken')}>
+              <span className="action-icon"><Icon name="plus" /></span>
+              {tr('Token', '代币')}
+            </button>
+          </div>
+
+          <div className="section-head">
+            <h3>{tr('Assets', '资产')}</h3>
+          </div>
+          <div className="list">
+            <div className="list-item" style={{ cursor: 'default' }}>
+              {nativeLogo(network) ? (
+                <CoinLogo logo={nativeLogo(network)} label={nativeSymbol} />
+              ) : (
+                <div className="avatar native">{nativeSymbol.slice(0, 1)}</div>
+              )}
+              <div className="main">
+                <div className="title">{nativeSymbol}</div>
+                <div className="sub">{currentNetwork?.name}</div>
+              </div>
+              <div className="end">
+                {balanceLoaded ? formatAmount(balance) : '—'}
+                {nativeUsd != null && <div className="sub">{formatUsd(nativeUsd)}</div>}
+              </div>
+            </div>
+            {tokens.map((token) => (
+              <button
+                key={token.address}
+                className="list-item"
+                onClick={() => {
+                  setSelectedToken(token);
+                  setView('tokenDetail');
+                }}
+              >
+                <CoinLogo logo={tokenLogo(token.address, token.symbol)} label={token.symbol} seed={token.address} />
+                <div className="main">
+                  <div className="title">{token.symbol}</div>
+                  <div className="sub">{token.name}</div>
+                </div>
+                <div className="end">
+                  {formatAmount(tokenBalances[token.address] || '0')}
+                  {tokenUsd(token.address) != null && <div className="sub">{formatUsd(tokenUsd(token.address))}</div>}
+                </div>
+              </button>
+            ))}
+          </div>
+          <button className="btn btn-link" onClick={() => setView('addToken')}>
+            + {t('addToken')}
+          </button>
+        </div>
+      )}
+
+      {view === 'receive' && walletInfo && (
+        <div className="page">
+          <PageHeader title={tr('Receive', '收款')} onBack={() => setView('wallet')} />
+          <div className="avatar native receive-avatar">L</div>
+          <p className="center text-secondary" style={{ margin: 0 }}>
+            {tr(`Send only ${currentNetwork?.name || ''} assets to this address`, `仅向此地址发送 ${currentNetwork?.name || ''} 网络资产`)}
+          </p>
+          <div className="address-box">{walletInfo.address}</div>
+          <button className="btn btn-primary" onClick={() => copyText(walletInfo.address)}>
+            <Icon name="copy" size={16} /> {tr('Copy address', '复制地址')}
+          </button>
+        </div>
+      )}
+
+      {view === 'send' && (
+        <div className="page">
+          <PageHeader title={`${t('send')} ${nativeSymbol}`} onBack={() => setView('wallet')} />
+          <div className="field">
+            <label className="field-label">{t('to')}</label>
+            <input className="input mono" placeholder="0x…" value={toAddress} onChange={(e) => setToAddress(e.target.value.trim())} autoFocus />
+          </div>
+          <div className="field">
+            <label className="field-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>{tr('Amount', '金额')}</span>
+              <span className="text-muted">{tr('Balance', '余额')}: {formatAmount(balance)} {nativeSymbol}</span>
+            </label>
+            <input className="input" placeholder="0.0" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </div>
+          {usdHint(amount, nativePrice)}
+          <div className="spacer" />
+          <button className="btn btn-primary" onClick={handleSend} disabled={sending || gasEstimating || !toAddress || !amount}>
+            {gasEstimating && <span className="spinner" />}
+            {gasEstimating ? t('estimating') : tr('Next', '下一步')}
+          </button>
+        </div>
+      )}
+
+      {view === 'addToken' && (
+        <div className="page">
+          <PageHeader title={t('addToken')} onBack={() => setView('wallet')} />
+          <div className="field">
+            <label className="field-label">{t('tokenAddress')}</label>
+            <input className="input mono" placeholder="0x…" value={tokenAddress} onChange={(e) => setTokenAddress(e.target.value.trim())} autoFocus />
+          </div>
+          {tokenMetaLoading && <p className="text-muted" style={{ margin: 0 }}>{t('loading')}</p>}
+          {tokenMetaError && <span className="text-danger">{tokenMetaError}</span>}
+          {preview ? (
+            <div className="list-item" style={{ cursor: 'default' }}>
+              <CoinLogo logo={tokenLogo(preview.address, preview.symbol)} label={preview.symbol} seed={preview.address} />
+              <div className="main">
+                <div className="title">{preview.symbol}</div>
+                <div className="sub">{preview.name}</div>
+              </div>
+              <div className="end"><div className="sub">decimals {preview.decimals}</div></div>
+            </div>
+          ) : (
+            <div className="row">
+              <div className="field">
+                <label className="field-label">{t('tokenSymbol')}</label>
+                <input className="input" value={manualSymbol} onChange={(e) => setManualSymbol(e.target.value)} />
+              </div>
+              <div className="field">
+                <label className="field-label">{t('tokenDecimals')}</label>
+                <input className="input" value={manualDecimals} onChange={(e) => setManualDecimals(e.target.value)} inputMode="numeric" />
+              </div>
+            </div>
+          )}
+          <div className="spacer" />
+          <button className="btn btn-primary" onClick={handleAddToken} disabled={!tokenAddress}>{t('add')}</button>
+        </div>
+      )}
+
+      {view === 'tokenDetail' && selectedToken && walletInfo && (
+        <div className="page">
+          <PageHeader title={selectedToken.symbol} onBack={() => setView('wallet')} />
+          <div className="card center">
+            <CoinLogo
+              logo={tokenLogo(selectedToken.address, selectedToken.symbol)}
+              label={selectedToken.symbol}
+              seed={selectedToken.address}
+              size={56}
+              className="receive-avatar"
+              style={{ margin: '0 auto 10px' }}
+            />
+            <div className="balance-amount" style={{ fontSize: 26 }}>
+              {formatAmount(tokenBalances[selectedToken.address] || '0')}
+              <span className="sym" style={{ fontSize: 14 }}>{selectedToken.symbol}</span>
+            </div>
+            {usdHint(tokenBalances[selectedToken.address] || '0', tokenPrice(selectedToken.address))}
+            <div className="text-muted" style={{ fontSize: 12 }}>{selectedToken.name}</div>
+          </div>
+          <div className="row">
+            <button className="btn btn-primary" onClick={() => setView('sendToken')}>
+              <Icon name="send" size={16} /> {t('send')}
+            </button>
+            <button className="btn btn-secondary" onClick={() => setView('receive')}>
+              <Icon name="receive" size={16} /> {tr('Receive', '收款')}
+            </button>
+          </div>
+          <div className="card">
+            <div className="kv">
+              <span className="k">{tr('Contract', '合约')}</span>
+              <button className="v mono btn-link" style={{ padding: 0, color: 'var(--text)' }} onClick={() => copyText(selectedToken.address)}>
+                {shortAddress(selectedToken.address)} <Icon name="copy" size={11} />
+              </button>
+            </div>
+            <div className="kv"><span className="k">{t('tokenDecimals')}</span><span className="v">{selectedToken.decimals}</span></div>
+          </div>
+          <div className="section-head"><h3>{t('activity')}</h3></div>
+          {selectedTokenHistory.length === 0 ? (
+            <div className="empty">
+              <div className="empty-icon"><Icon name="activity" /></div>
+              {t('noTransactions')}
+            </div>
+          ) : (
+            <div className="list">
+              {selectedTokenHistory.map((r) => {
+                const isSent = r.from.toLowerCase() === walletInfo.address.toLowerCase();
+                return (
+                  <button key={r.hash} className="list-item" onClick={() => openTx(r.hash)} title={r.hash}>
+                    <div className={`avatar ${isSent ? 'sent' : 'received'}`}>
+                      <Icon name={isSent ? 'arrowUp' : 'arrowDown'} size={16} />
+                    </div>
+                    <div className="main">
+                      <div className="title">{isSent ? tr('Sent', '转出') : tr('Received', '转入')}</div>
+                      <div className="sub mono">{shortAddress(isSent ? r.to : r.from)}</div>
+                    </div>
+                    <div className="end">{isSent ? '-' : '+'}{formatAmount(r.value)}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {view === 'sendToken' && selectedToken && walletInfo && (
+        <div className="page">
+          <PageHeader title={`${t('send')} ${selectedToken.symbol}`} onBack={() => setView('tokenDetail')} />
+          <div className="field">
+            <label className="field-label">{t('to')}</label>
+            <input className="input mono" placeholder="0x…" value={sendTokenTo} onChange={(e) => setSendTokenTo(e.target.value.trim())} autoFocus />
+          </div>
+          <div className="field">
+            <label className="field-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>{tr('Amount', '金额')}</span>
+              <span className="text-muted">{tr('Balance', '余额')}: {formatAmount(tokenBalances[selectedToken.address] || '0')}</span>
+            </label>
+            <input className="input" placeholder="0.0" inputMode="decimal" value={sendTokenAmount} onChange={(e) => setSendTokenAmount(e.target.value)} />
+          </div>
+          {usdHint(sendTokenAmount, tokenPrice(selectedToken.address))}
+          <div className="spacer" />
+          <button className="btn btn-primary" onClick={handleSendTokenNext} disabled={sendingToken || gasEstimating || !sendTokenTo || !sendTokenAmount}>
+            {gasEstimating && <span className="spinner" />}
+            {gasEstimating ? t('estimating') : tr('Next', '下一步')}
+          </button>
+        </div>
+      )}
+
+      {view === 'activity' && walletInfo && (
+        <Activity
+          records={history}
+          wallet={walletInfo}
+          network={network}
+          tokens={tokens}
+          lang={lang}
+          onBack={() => setView('wallet')}
+          t={t}
+          symbol={nativeSymbol}
+          explorerBase={explorerBase}
+        />
+      )}
+
+      {view === 'networks' && (
+        <div className="page">
+          <PageHeader title={t('networks')} onBack={() => setView(walletInfo ? 'wallet' : 'home')} />
+          <NetworkManager onNetworkChange={handleNetworkManagerChange} currentNetwork={network} lang={lang} />
+        </div>
+      )}
+
+      {view === 'confirmEthTransaction' && pendingTransaction && feeChoice && (
+        <div className="page">
+          <PageHeader title={t('confirmTransaction')} />
+          <div className="card center">
+            <div className="text-muted" style={{ fontSize: 12 }}>{t('send')}</div>
+            <div className="balance-amount" style={{ fontSize: 28 }}>
+              {pendingTransaction.amount}<span className="sym" style={{ fontSize: 14 }}>{nativeSymbol}</span>
+            </div>
+            {usdHint(pendingTransaction.amount, nativePrice)}
+          </div>
+          <div className="card">
+            <div className="kv"><span className="k">{t('from')}</span><span className="v mono">{shortAddress(walletInfo?.address)}</span></div>
+            <div className="kv"><span className="k">{t('to')}</span><span className="v mono">{pendingTransaction.to}</span></div>
+            <div className="kv"><span className="k">{t('network')}</span><span className="v">{currentNetwork?.name}</span></div>
+          </div>
+          {renderFeeCard(pendingTransaction.amount)}
+          <div className="footer-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                setView('send');
+                setPendingTransaction(null);
+                resetFee();
+              }}
+            >
+              {t('reject')}
+            </button>
+            <button className="btn btn-primary" onClick={handleConfirmEthTransaction} disabled={sending}>
+              {sending && <span className="spinner" />}
+              {sending ? t('sending') : t('confirm')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {view === 'confirmTokenTransaction' && pendingTransaction && feeChoice && pendingTransaction.token && (
+        <div className="page">
+          <PageHeader title={t('confirmTransaction')} />
+          <div className="card center">
+            <div className="text-muted" style={{ fontSize: 12 }}>{t('send')}</div>
+            <div className="balance-amount" style={{ fontSize: 28 }}>
+              {pendingTransaction.amount}<span className="sym" style={{ fontSize: 14 }}>{pendingTransaction.token.symbol}</span>
+            </div>
+            {usdHint(pendingTransaction.amount, tokenPrice(pendingTransaction.token.address))}
+            <div className="text-muted" style={{ fontSize: 12 }}>{pendingTransaction.token.name}</div>
+          </div>
+          <div className="card">
+            <div className="kv"><span className="k">{t('from')}</span><span className="v mono">{shortAddress(walletInfo?.address)}</span></div>
+            <div className="kv"><span className="k">{t('to')}</span><span className="v mono">{pendingTransaction.to}</span></div>
+            <div className="kv"><span className="k">{t('network')}</span><span className="v">{currentNetwork?.name}</span></div>
+          </div>
+          {renderFeeCard()}
+          <div className="footer-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                setView('sendToken');
+                setPendingTransaction(null);
+                resetFee();
+              }}
+            >
+              {t('reject')}
+            </button>
+            <button className="btn btn-primary" onClick={handleConfirmTokenTransaction} disabled={sendingToken}>
+              {sendingToken && <span className="spinner" />}
+              {sendingToken ? t('sending') : t('confirm')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {view === 'authorize' && pendingAuth && (
+        <div className="page">
+          <PageHeader title={tr('Connection request', '连接请求')} />
+          <div className="card site-badge">
+            <div className="site-icon">{(currentSite || '?').slice(0, 1).toUpperCase()}</div>
+            <div className="site-host">{currentSite}</div>
+            <span className="text-muted" style={{ fontSize: 12 }}>{tr('wants to connect to your wallet', '请求连接你的钱包')}</span>
+          </div>
+          <div className="card">
+            <p className="card-title">{tr('This site will be able to', '该网站将可以')}</p>
+            <div className="kv"><span className="k">✓ {tr('See your address', '查看你的地址')}</span><span className="v mono">{shortAddress(walletInfo?.address)}</span></div>
+            <div className="kv"><span className="k">✓ {tr('Request transactions', '请求发起交易')}</span><span className="v" /></div>
+          </div>
+          <div className="alert alert-warning">
+            <Icon name="warning" size={16} />
+            <span>{tr('Only connect to sites you trust.', '仅连接你信任的网站。')}</span>
+          </div>
+          <div className="footer-actions">
+            <button className="btn btn-secondary" onClick={() => handleAuthorize(false)}>{t('reject')}</button>
+            <button className="btn btn-primary" onClick={() => handleAuthorize(true)}>{tr('Connect', '连接')}</button>
+          </div>
+        </div>
+      )}
+
+      {view === 'signTransaction' && pendingSignature && (
+        <div className="page">
+          <PageHeader title={tr('Signature request', '签名请求')} />
+          <div className="card site-badge" style={{ padding: '14px 12px' }}>
+            <div className="site-icon">{(currentSite || '?').slice(0, 1).toUpperCase()}</div>
+            {currentSite && <div className="site-host">{currentSite}</div>}
+            <span className="chip">{pendingSignature.request.method}</span>
+          </div>
+
+          {pendingSignature.request.method === 'eth_sendTransaction' && (
+            <div className="card">
+              <p className="card-title">{t('transactionDetails')}</p>
+              <div className="kv"><span className="k">{t('to')}</span><span className="v mono">{pendingSignature.request.params[0].to}</span></div>
+              <div className="kv total">
+                <span className="k">{t('value')}</span>
+                <span className="v">{formatWeiValue(pendingSignature.request.params[0].value)} {nativeSymbol}</span>
+              </div>
+              <div className="kv"><span className="k">{t('gasLimit')}</span><span className="v mono">{pendingSignature.request.params[0].gasLimit || pendingSignature.request.params[0].gas || 'Auto'}</span></div>
+              {pendingSignature.request.params[0].data && pendingSignature.request.params[0].data !== '0x' && (
+                <div style={{ marginTop: 8 }}>
+                  <div className="field-label" style={{ marginBottom: 6 }}>Data</div>
+                  <div className="code-box">{pendingSignature.request.params[0].data}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {pendingSignature.request.method !== 'eth_sendTransaction' && (
+            <div className="card">
+              <p className="card-title">{tr('Message', '消息内容')}</p>
+              <div className="code-box">
+                {typeof pendingSignature.request.params[0] === 'string'
+                  ? pendingSignature.request.params[0]
+                  : JSON.stringify(pendingSignature.request.params, null, 2)}
+              </div>
+            </div>
+          )}
+
+          <div className="alert alert-warning">
+            <Icon name="warning" size={16} />
+            <span>{tr('Review the details carefully before signing.', '请仔细检查详情，确认无误后再签名。')}</span>
+          </div>
+          <div className="footer-actions">
+            <button className="btn btn-secondary" onClick={() => handleSignTransaction(false)} disabled={isSigningPending}>
+              {t('reject')}
+            </button>
+            <button className="btn btn-primary" onClick={() => handleSignTransaction(true)} disabled={isSigningPending}>
+              {isSigningPending && <span className="spinner" />}
+              {isSigningPending ? tr('Signing…', '签名中…') : tr('Sign', '签名')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isSigningPending && <LoadingSpinner message={tr('Signing, please wait…', '正在签名，请稍候…')} />}
+      {toast && <div className="toast">{toast}</div>}
     </div>
-  )}
-  
-  {/* 签名加载遮罩层 */}
-  {isSigningPending && (
-    <LoadingSpinner 
-      message={lang === 'zh' ? '正在签名，请稍候...' : 'Signing, please wait...'}
-    />
-  )}
-  </div>
   );
 };
 
@@ -2460,7 +2118,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 12, width: 320 }}>
+        <div className="app" style={{ padding: 16 }}>
           <h3>Runtime Error</h3>
           <pre style={{ whiteSpace: 'pre-wrap' }}>{this.state.error}</pre>
         </div>
