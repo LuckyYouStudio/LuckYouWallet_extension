@@ -2,7 +2,8 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { hex } from '@scure/base';
 import type { TokenInfo } from '@core/wallet';
-import { formatUnits, isTronAddress, parseUnits, tronAddressFromPublicKey, tronToHex } from './encoding';
+import type { ActivityItem } from '@core/history';
+import { formatUnits, isTronAddress, parseUnits, tronAddressFromPublicKey, tronFromHex, tronToHex } from './encoding';
 import type { AppNetwork, Asset, ChainAccount, ChainAdapter } from './types';
 
 // 主网内置 TRC20 代币 (精度已在链上核对)
@@ -15,6 +16,8 @@ const MAINNET_TOKENS: TokenInfo[] = [
 
 /** TRC20 转账的手续费上限 (sun)，不足能量时最多燃烧这么多 TRX */
 const FEE_LIMIT = 100_000_000;
+/** 低于该值 (0.1 TRX) 的收款视为粉尘攻击 */
+const DUST_SUN = 100_000;
 /** 无免费带宽时 TRX 转账约消耗 ~270 带宽 × 1000 sun */
 const TRANSFER_BANDWIDTH_FEE = 270_000n;
 
@@ -143,6 +146,59 @@ export function createTronAdapter(network: AppNetwork): ChainAdapter {
       return tokens
         .filter((t) => BigInt(balances.get(t.address) ?? '0') > 0n)
         .map<Asset>((t) => ({ token: t, balance: formatUnits(BigInt(balances.get(t.address)!), t.decimals) }));
+    },
+
+    /**
+     * TRX 转账 + TRC20 转账。垃圾代币可伪造转账事件，代币记录只显示
+     * 白名单代币的非零转账，以及本地址亲自签名发出的交易
+     */
+    async getHistory(address, extraTokens) {
+      const allowed = new Set([...tokens, ...extraTokens].map((t) => t.address));
+      // 两次查询依次进行，避免触发 TronGrid 限流
+      const native = await tronFetch(`${base}/v1/accounts/${address}/transactions?limit=30`);
+      const trc20 = await tronFetch(`${base}/v1/accounts/${address}/transactions/trc20?limit=30`);
+      const items: ActivityItem[] = [];
+      const ownerHex = tronToHex(address);
+      const signedByMe = new Set(
+        (native.data ?? [])
+          .filter((tx: any) => tx.raw_data?.contract?.[0]?.parameter?.value?.owner_address === ownerHex)
+          .map((tx: any) => tx.txID),
+      );
+      (native.data ?? []).forEach((tx: any) => {
+        const contract = tx.raw_data?.contract?.[0];
+        if (contract?.type !== 'TransferContract') return;
+        const { owner_address, to_address, amount } = contract.parameter.value;
+        const from = tronFromHex(owner_address);
+        const to = tronFromHex(to_address);
+        const outgoing = from === address;
+        // 极小额 TRX 收款多为地址投毒，不显示
+        if (!outgoing && !(amount >= DUST_SUN)) return;
+        items.push({
+          hash: tx.txID,
+          direction: outgoing ? (to === address ? 'self' : 'out') : 'in',
+          counterparty: outgoing ? to : from,
+          value: formatUnits(BigInt(amount), 6),
+          symbol: network.symbol,
+          timestamp: tx.block_timestamp || 0,
+          status: tx.ret?.[0]?.contractRet && tx.ret[0].contractRet !== 'SUCCESS' ? 'failed' : 'success',
+        });
+      });
+      (trc20.data ?? []).forEach((tx: any) => {
+        const outgoing = tx.from === address;
+        const trusted = signedByMe.has(tx.transaction_id) || (allowed.has(tx.token_info?.address) && tx.value !== '0');
+        if (!trusted) return;
+        items.push({
+          hash: tx.transaction_id,
+          direction: outgoing ? (tx.to === address ? 'self' : 'out') : 'in',
+          counterparty: outgoing ? tx.to : tx.from,
+          value: formatUnits(BigInt(tx.value), Number(tx.token_info?.decimals ?? 6)),
+          symbol: tx.token_info?.symbol || '?',
+          token: tx.token_info?.address,
+          timestamp: tx.block_timestamp || 0,
+          status: 'success',
+        });
+      });
+      return items.sort((a, b) => b.timestamp - a.timestamp);
     },
 
     async estimateFee(from, to, amount, token) {

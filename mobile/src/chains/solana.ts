@@ -2,6 +2,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { base64, hex } from '@scure/base';
 import type { TokenInfo } from '@core/wallet';
+import type { ActivityItem } from '@core/history';
 import { bs58, formatUnits, parseUnits } from './encoding';
 import type { AppNetwork, Asset, ChainAdapter } from './types';
 
@@ -170,6 +171,100 @@ export function transferInstructions(
   return instructions;
 }
 
+// ---------- 交易记录 ----------
+
+const HISTORY_LIMIT = 15;
+/** 低于该值的 SOL 收款视为垃圾 (粉尘攻击) */
+const DUST_LAMPORTS = 10_000n;
+
+interface TokenBalance {
+  mint: string;
+  owner?: string;
+  uiTokenAmount: { amount: string; decimals: number };
+}
+
+export interface SolanaTx {
+  blockTime: number | null;
+  meta: {
+    err: unknown;
+    fee: number;
+    preBalances: number[];
+    postBalances: number[];
+    preTokenBalances?: TokenBalance[];
+    postTokenBalances?: TokenBalance[];
+  } | null;
+  transaction: { message: { accountKeys: { pubkey: string }[] } };
+}
+
+/** 根据余额变化描述一笔交易；与本地址无关或为垃圾收款时返回 null */
+export function describeSolanaTx(
+  tx: SolanaTx,
+  address: string,
+  known: Map<string, TokenInfo>,
+  nativeSymbol: string,
+): Omit<ActivityItem, 'hash' | 'timestamp'> | null {
+  const meta = tx.meta!;
+  const status: ActivityItem['status'] = meta.err ? 'failed' : 'success';
+
+  // 代币：按 mint 汇总本地址的余额变化
+  const deltas = new Map<string, { delta: bigint; decimals: number }>();
+  const add = (list: TokenBalance[] | undefined, sign: bigint) =>
+    (list ?? []).forEach((b) => {
+      if (b.owner !== address) return;
+      const cur = deltas.get(b.mint) ?? { delta: 0n, decimals: b.uiTokenAmount.decimals };
+      cur.delta += sign * BigInt(b.uiTokenAmount.amount);
+      deltas.set(b.mint, cur);
+    });
+  add(meta.preTokenBalances, -1n);
+  add(meta.postTokenBalances, 1n);
+  for (const [mint, { delta, decimals }] of deltas) {
+    if (delta === 0n) continue;
+    const outgoing = delta < 0n;
+    const token = known.get(mint);
+    if (!outgoing && !token) continue;
+    const other = [...(meta.postTokenBalances ?? []), ...(meta.preTokenBalances ?? [])].find(
+      (b) => b.mint === mint && b.owner && b.owner !== address,
+    );
+    return {
+      direction: outgoing ? 'out' : 'in',
+      counterparty: other?.owner || '',
+      value: formatUnits(outgoing ? -delta : delta, decimals),
+      symbol: token?.symbol || `${mint.slice(0, 4)}…`,
+      token: mint,
+      status,
+    };
+  }
+
+  // SOL：手续费由付款方 (第 0 个账户) 支付，发送金额需扣除
+  const keys = tx.transaction.message.accountKeys.map((k) => k.pubkey);
+  const index = keys.indexOf(address);
+  if (index < 0) return null;
+  let delta = BigInt(meta.postBalances[index]) - BigInt(meta.preBalances[index]);
+  if (index === 0) delta += BigInt(meta.fee);
+  if (delta === 0n) return index === 0 ? { direction: 'self', counterparty: address, value: '0', symbol: nativeSymbol, status } : null;
+  const outgoing = delta < 0n;
+  if (!outgoing && delta < DUST_LAMPORTS) return null;
+  // 对方：余额变化方向相反且幅度最大的账户
+  let other = '';
+  let best = 0n;
+  keys.forEach((key, i) => {
+    if (i === index) return;
+    const d = BigInt(meta.postBalances[i]) - BigInt(meta.preBalances[i]);
+    const magnitude = outgoing ? d : -d;
+    if (magnitude > best) {
+      best = magnitude;
+      other = key;
+    }
+  });
+  return {
+    direction: outgoing ? 'out' : 'in',
+    counterparty: other,
+    value: formatUnits(outgoing ? -delta : delta, 9),
+    symbol: nativeSymbol,
+    status,
+  };
+}
+
 // ---------- RPC ----------
 
 async function rpc<T>(endpoint: string, method: string, params: unknown[] = []): Promise<T> {
@@ -224,6 +319,34 @@ export function createSolanaAdapter(network: AppNetwork): ChainAdapter {
       return tokens
         .filter((t) => (balances.get(t.address) ?? 0n) > 0n)
         .map<Asset>((t) => ({ token: t, balance: formatUnits(balances.get(t.address)!, t.decimals) }));
+    },
+
+    /** 最近 15 笔交易：按本地址的 SOL / 代币余额变化判断收发 */
+    async getHistory(address, extraTokens) {
+      const known = new Map([...tokens, ...extraTokens].map((t) => [t.address, t]));
+      const signatures = await rpc<{ signature: string; blockTime: number | null; err: unknown }[]>(
+        endpoint,
+        'getSignaturesForAddress',
+        [address, { limit: HISTORY_LIMIT }],
+      );
+      // 公共节点限流较严，分批并发查询交易详情
+      const txs: (SolanaTx | null)[] = [];
+      for (let i = 0; i < signatures.length; i += 4) {
+        const batch = signatures.slice(i, i + 4).map((s) =>
+          rpc<SolanaTx | null>(endpoint, 'getTransaction', [
+            s.signature,
+            { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' },
+          ]).catch(() => null),
+        );
+        txs.push(...(await Promise.all(batch)));
+      }
+      const items: ActivityItem[] = [];
+      txs.forEach((tx, i) => {
+        if (!tx?.meta) return;
+        const item = describeSolanaTx(tx, address, known, network.symbol);
+        if (item) items.push({ ...item, hash: signatures[i].signature, timestamp: (tx.blockTime ?? 0) * 1000 });
+      });
+      return items;
     },
 
     async estimateFee(from, to, amount, token) {

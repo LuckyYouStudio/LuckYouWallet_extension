@@ -538,57 +538,6 @@ export async function estimateGasForToken(
   };
 }
 
-export async function getTransactionHistory(
-  address: string,
-  network: NetworkKey,
-): Promise<TransactionRecord[]> {
-  const allNetworks = await getAllNetworks();
-  const networkConfig = allNetworks[network];
-  if (!networkConfig) {
-    throw new Error(`Network ${network} not found`);
-  }
-  const provider = getProvider(networkConfig);
-  const records: TransactionRecord[] = [];
-  let latest: number;
-  try {
-    latest = await provider.getBlockNumber();
-  } catch {
-    return records;
-  }
-  const start = Math.max(latest - 100, 0);
-  const target = address.toLowerCase();
-  for (let i = latest; i >= start; i--) {
-    let block;
-    try {
-      block = await (provider as any).getBlockWithTransactions(i);
-    } catch {
-      continue;
-    }
-    if (!block) continue;
-    for (const tx of block.transactions) {
-      const from = tx.from.toLowerCase();
-      const toAddr = (tx.to || '').toLowerCase();
-      if (from === target || toAddr === target) {
-        let status = 0;
-        try {
-          const receipt = await provider.getTransactionReceipt(tx.hash);
-          status = Number(receipt?.status ?? 0);
-        } catch {
-          status = 0;
-        }
-        records.push({
-          hash: tx.hash,
-          from: tx.from,
-          to: tx.to || '',
-          value: parseFloat(formatEther(tx.value)).toFixed(5),
-          status,
-        });
-      }
-    }
-  }
-  return records;
-}
-
 const ERC20_ABI = [
   'function name() view returns (string)',
   'function symbol() view returns (string)',

@@ -6,6 +6,7 @@ import {
   sendTokenWithPrivateKey,
 } from '@core/wallet';
 import { estimateTransferGasLimit, evmFeeCost, EvmGasSettings, FEE_LEVELS, suggestEvmFees } from '@core/fees';
+import { getEvmActivity, hasEvmHistory } from '@core/history';
 import type { AppNetwork, ChainAdapter, FeeOption } from './types';
 
 /** EVM 链直接复用插件的共享钱包核心 */
@@ -18,6 +19,7 @@ export function createEvmAdapter(network: AppNetwork): ChainAdapter {
   };
 
   return {
+    getHistory: hasEvmHistory(key) ? (address, tokens) => getEvmActivity(address, key, tokens) : undefined,
     isValidAddress: (address) => isAddress(address),
     getBalance: (address) => getEthBalance(address, key),
     getTokens: (address) => detectKnownTokens(address, key),

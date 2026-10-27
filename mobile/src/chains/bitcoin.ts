@@ -2,7 +2,16 @@ import * as btc from '@scure/btc-signer';
 import { hex } from '@scure/base';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { formatUnits, parseUnits } from './encoding';
+import type { ActivityItem } from '@core/history';
 import type { AppNetwork, ChainAdapter, FeeOption } from './types';
+
+interface EsploraTx {
+  txid: string;
+  fee: number;
+  status: { confirmed: boolean; block_time?: number };
+  vin: { prevout?: { scriptpubkey_address?: string; value: number } }[];
+  vout: { scriptpubkey_address?: string; value: number }[];
+}
 
 interface EsploraUtxo {
   txid: string;
@@ -80,6 +89,30 @@ export function createBitcoinAdapter(network: AppNetwork): ChainAdapter {
 
     async getTokens() {
       return [];
+    },
+
+    /** 最近 25 笔 (含未确认)：按本地址的输入/输出净额判断收发 */
+    async getHistory(address) {
+      const txs = await api<EsploraTx[]>(base, `/address/${address}/txs`);
+      return txs.map((tx): ActivityItem => {
+        const received = tx.vout.reduce((sum, o) => (o.scriptpubkey_address === address ? sum + BigInt(o.value) : sum), 0n);
+        const spent = tx.vin.reduce((sum, i) => (i.prevout?.scriptpubkey_address === address ? sum + BigInt(i.prevout.value) : sum), 0n);
+        const outgoing = spent > 0n;
+        // 发送金额 = 花费 - 找零 - 手续费
+        const value = outgoing ? spent - received - BigInt(tx.fee) : received;
+        const other = outgoing
+          ? tx.vout.find((o) => o.scriptpubkey_address && o.scriptpubkey_address !== address)?.scriptpubkey_address
+          : tx.vin.find((i) => i.prevout?.scriptpubkey_address !== address)?.prevout?.scriptpubkey_address;
+        return {
+          hash: tx.txid,
+          direction: outgoing ? (value === 0n ? 'self' : 'out') : 'in',
+          counterparty: other || address,
+          value: formatUnits(value, 8),
+          symbol: network.symbol,
+          timestamp: (tx.status.block_time || 0) * 1000,
+          status: tx.status.confirmed ? 'success' : 'pending',
+        };
+      });
     },
 
     async estimateFee(from, to, amount, _token, settings) {

@@ -1,5 +1,6 @@
 import type { TokenInfo } from '@core/wallet';
 import type { EvmGasSettings } from '@core/fees';
+import type { ActivityItem } from '@core/history';
 
 export type ChainFamily = 'evm' | 'bitcoin' | 'solana' | 'tron';
 
@@ -78,4 +79,6 @@ export interface ChainAdapter {
   /** 不传 settings 时返回各档位 (默认市场档)；传入时按该参数估算 */
   estimateFee(from: string, to: string, amount: string, token?: TokenInfo, settings?: FeeSettings): Promise<FeeQuote>;
   send(account: ChainAccount, to: string, amount: string, token?: TokenInfo, settings?: FeeSettings): Promise<SendResult>;
+  /** 链上交易记录 (含收款)；未实现的网络只显示本机发出的交易 */
+  getHistory?(address: string, tokens: TokenInfo[]): Promise<ActivityItem[]>;
 }

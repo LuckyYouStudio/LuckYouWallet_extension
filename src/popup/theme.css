@@ -342,6 +342,9 @@ html, body {
 .status-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
 .status-pill.ok { background: var(--success-soft); color: var(--success); }
 .status-pill.fail { background: var(--danger-soft); color: var(--danger); }
+.status-pill.pending { background: var(--warning-soft); color: var(--warning); }
+.text-success { color: var(--success); }
+.list-item .end { max-width: 55%; overflow-wrap: anywhere; }
 
 .text-muted { color: var(--text-muted); }
 .text-secondary { color: var(--text-secondary); }

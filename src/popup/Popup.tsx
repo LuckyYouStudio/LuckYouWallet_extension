@@ -31,7 +31,6 @@ import {
   getEthBalance,
   sendEth,
   sendEthWithPrivateKey,
-  getTransactionHistory,
   TransactionRecord,
   NETWORKS,
   NetworkKey,
@@ -894,12 +893,6 @@ const Popup: React.FC = () => {
       
       const newBalance = await getEthBalance(walletInfo.address, network);
       setBalanceWithLog(parseFloat(newBalance).toFixed(5), 'transaction-success');
-      const txHistory = await getTransactionHistory(walletInfo.address, network);
-      if (txHistory.length > 0) {
-        setHistory(txHistory);
-        localStorage.setItem(key, JSON.stringify(txHistory));
-      }
-      
       setToAddress('');
       setAmount('');
       setPendingTransaction(null);
@@ -925,6 +918,15 @@ const Popup: React.FC = () => {
         : await sendToken(walletInfo.mnemonic, token, to, value, network, feeChoice.gas);
       const success = Number(status) === 1;
       alert(success ? `Transaction successful: ${hash}` : `Transaction failed: ${hash}`);
+
+      // 记录本机发出的代币交易，链上索引收录前也能在活动中看到
+      const record: TransactionRecord = { hash, from: walletInfo.address, to, value: `${value} ${token.symbol}`, status: Number(status) };
+      const historyKey = getHistoryKey(walletInfo.address, network);
+      setHistory((prev) => {
+        const updated = [record, ...prev];
+        localStorage.setItem(historyKey, JSON.stringify(updated));
+        return updated;
+      });
       
       // 刷新代币余额
       const b = await getTokenBalance(pendingTransaction.token, walletInfo.address, network);
@@ -1126,17 +1128,7 @@ const Popup: React.FC = () => {
       } else {
         setHistory([]);
       }
-      
-      getTransactionHistory(walletInfo.address, network)
-        .then((h) => {
-          if (h.length > 0) {
-            setHistory(h);
-            localStorage.setItem(key, JSON.stringify(h));
-          }
-        })
-        .catch((e) => {
-          console.error('Failed to fetch history', e);
-        });
+      // 链上记录 (含收款) 由活动页按需查询
     } else {
       // 只有在没有钱包信息时才重置余额
       if (!walletInfo?.address) {
@@ -1869,6 +1861,9 @@ const Popup: React.FC = () => {
         <Activity
           records={history}
           wallet={walletInfo}
+          network={network}
+          tokens={tokens}
+          lang={lang}
           onBack={() => setView('wallet')}
           t={t}
           symbol={nativeSymbol}

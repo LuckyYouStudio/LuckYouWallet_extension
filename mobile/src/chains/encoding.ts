@@ -21,6 +21,11 @@ export function tronToHex(address: string): string {
   return hex.encode(bytes);
 }
 
+/** 21 字节 hex (41 开头) → Tron base58 地址 */
+export function tronFromHex(value: string): string {
+  return bs58check.encode(hex.decode(value.replace(/^0x/, '')));
+}
+
 export function isTronAddress(address: string): boolean {
   try {
     tronToHex(address);
