@@ -6,7 +6,7 @@ import type { FeeQuote } from '@/chains';
 import { Alert, Button, Card, Icon, KeyValue, Screen } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
 import { useAuthorize } from '@/lib/useAuthorize';
-import { formatAmount, shortAddress } from '@/lib/format';
+import { errorMessage, formatAmount, shortAddress } from '@/lib/format';
 import { colors } from '@/theme';
 
 type Phase = 'review' | 'sending' | 'done' | 'failed';
@@ -39,8 +39,8 @@ export default function Confirm() {
       setHash(result.hash);
       setPhase(result.status === 1 ? 'done' : 'failed');
       Haptics.notificationAsync(result.status === 1 ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error);
-    } catch (e: any) {
-      setError(e?.shortMessage || e?.message || String(e));
+    } catch (e) {
+      setError(errorMessage(e));
       setPhase('failed');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }

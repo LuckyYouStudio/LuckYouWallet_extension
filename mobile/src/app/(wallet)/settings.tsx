@@ -6,6 +6,7 @@ import { SymbolViewProps } from 'expo-symbols';
 import { Icon, Screen, Segmented } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
 import { useAuthorize } from '@/lib/useAuthorize';
+import { errorMessage } from '@/lib/format';
 import { colors } from '@/theme';
 
 const Row: React.FC<{
@@ -80,7 +81,7 @@ export default function Settings() {
           onPress={() =>
             Alert.alert(t('resetTitle'), t('resetBody'), [
               { text: t('cancel'), style: 'cancel' },
-              { text: t('reset'), style: 'destructive', onPress: reset },
+              { text: t('reset'), style: 'destructive', onPress: () => reset().catch((e) => Alert.alert(t('somethingWrong'), errorMessage(e))) },
             ])
           }
         />

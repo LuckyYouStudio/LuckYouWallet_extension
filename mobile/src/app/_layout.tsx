@@ -1,11 +1,12 @@
 import '@/lib/storage';
 import React, { useEffect, useState } from 'react';
 import { AppState, StyleSheet, View } from 'react-native';
-import { Stack } from 'expo-router';
+import { ErrorBoundaryProps, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { LinearGradient } from 'expo-linear-gradient';
 import { WalletProvider, useWallet } from '@/state/WalletContext';
+import { ErrorScreen } from '@/components/ErrorScreen';
 import { colors } from '@/theme';
 
 SplashScreen.preventAutoHideAsync();
@@ -31,13 +32,16 @@ function PrivacyShield() {
 }
 
 function RootNavigator() {
-  const { status, t } = useWallet();
+  const { status, retryBoot, t } = useWallet();
 
   useEffect(() => {
     if (status !== 'loading') SplashScreen.hideAsync();
   }, [status]);
 
   if (status === 'loading') return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
+  if (status === 'error') {
+    return <ErrorScreen title={t('somethingWrong')} message={t('startupFailed')} retryLabel={t('retry')} onRetry={retryBoot} />;
+  }
 
   return (
     <Stack screenOptions={screenOptions}>
@@ -45,6 +49,7 @@ function RootNavigator() {
       <Stack.Protected guard={status === 'onboarding'}>
         <Stack.Screen name="(onboarding)/welcome" options={{ headerShown: false }} />
         <Stack.Screen name="(onboarding)/create" options={{ title: '' }} />
+        <Stack.Screen name="(onboarding)/verify" options={{ title: '' }} />
         <Stack.Screen name="(onboarding)/import" options={{ title: t('importTitle') }} />
         <Stack.Screen name="(onboarding)/password" options={{ title: '' }} />
       </Stack.Protected>
@@ -64,6 +69,22 @@ function RootNavigator() {
         <Stack.Screen name="(wallet)/secret" options={{ title: '' }} />
       </Stack.Protected>
     </Stack>
+  );
+}
+
+/** 全局兜底：任何页面渲染出错时显示可恢复的错误页，而不是让 App 闪退 */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  useEffect(() => {
+    SplashScreen.hideAsync();
+  }, []);
+  return (
+    <ErrorScreen
+      title="出错了 · Something went wrong"
+      message={'钱包数据安全，请重试。\nYour wallet is safe. Please try again.'}
+      detail={error.message}
+      retryLabel="重试 · Try again"
+      onRetry={retry}
+    />
   );
 }
 

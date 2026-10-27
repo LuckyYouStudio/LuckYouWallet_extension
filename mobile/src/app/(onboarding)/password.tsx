@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, StyleSheet, Switch, Text, View } from 'react-native';
 import { Button, Field, Icon, Screen } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
+import { errorMessage } from '@/lib/format';
 import { colors } from '@/theme';
 
 export default function SetPassword() {
@@ -19,6 +20,8 @@ export default function SetPassword() {
     setTimeout(async () => {
       try {
         await finishSetup(password, biometrics);
+      } catch (e) {
+        Alert.alert(t('somethingWrong'), errorMessage(e));
       } finally {
         setBusy(false);
       }

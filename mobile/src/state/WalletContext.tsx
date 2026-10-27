@@ -15,13 +15,15 @@ import { appendHistory, clearAll, kv, loadTokens, saveTokens } from '@/lib/stora
 import * as vault from '@/lib/vault';
 import { detectLang, Lang, StringKey, strings } from '@/lib/i18n';
 
-type Status = 'loading' | 'onboarding' | 'locked' | 'unlocked';
+type Status = 'loading' | 'error' | 'onboarding' | 'locked' | 'unlocked';
 
 /** 后台超过该时长自动锁定 */
 const AUTO_LOCK_MS = 5 * 60 * 1000;
 
 interface WalletContextValue {
   status: Status;
+  /** 启动失败 (如读取钥匙串出错) 时重试 */
+  retryBoot: () => void;
   lang: Lang;
   t: (key: StringKey, vars?: Record<string, string>) => string;
   setLang: (lang: Lang) => void;
@@ -103,27 +105,39 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [lang],
   );
 
-  // 启动：检查 Keychain 中是否已有钱包
+  const [bootAttempt, setBootAttempt] = useState(0);
+  const retryBoot = useCallback(() => {
+    setStatus('loading');
+    setBootAttempt((n) => n + 1);
+  }, []);
+
+  // 启动：检查 Keychain 中是否已有钱包。
+  // 失败时绝不能当作"没有钱包"进入创建流程，否则可能覆盖已有钱包，因此进入错误页让用户重试
   useEffect(() => {
     (async () => {
-      await vault.ensureFreshInstall();
-      const savedLang = await kv.get<Lang>('lang');
-      if (savedLang) setLangState(savedLang);
-      const [exists, bioEnabled, bioAvailable, evmNets, current] = await Promise.all([
-        vault.hasWallet(),
-        vault.isBiometricsEnabled(),
-        vault.biometricsAvailable(),
-        getAllNetworks(),
-        getCurrentNetwork(),
-      ]);
-      const nets = buildNetworks(evmNets);
-      setBiometricsEnabled(bioEnabled);
-      setBiometricsAvailable(bioAvailable);
-      setNetworks(nets);
-      setNetworkKey(nets[current] ? current : 'mainnet');
-      setStatus(exists ? 'locked' : 'onboarding');
+      try {
+        await vault.ensureFreshInstall();
+        const savedLang = await kv.get<Lang>('lang');
+        if (savedLang) setLangState(savedLang);
+        const [exists, bioEnabled, bioAvailable, evmNets, current] = await Promise.all([
+          vault.hasWallet(),
+          vault.isBiometricsEnabled(),
+          vault.biometricsAvailable(),
+          getAllNetworks(),
+          getCurrentNetwork(),
+        ]);
+        const nets = buildNetworks(evmNets);
+        setBiometricsEnabled(bioEnabled);
+        setBiometricsAvailable(bioAvailable);
+        setNetworks(nets);
+        setNetworkKey(nets[current] ? current : 'mainnet');
+        setStatus(exists ? 'locked' : 'onboarding');
+      } catch (e) {
+        console.warn('[LuckYou] boot failed', e);
+        setStatus('error');
+      }
     })();
-  }, []);
+  }, [bootAttempt]);
 
   // 自动锁定：App 在后台超过 AUTO_LOCK_MS 后回到前台需重新解锁
   useEffect(() => {
@@ -143,7 +157,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
-    kv.set('lang', l);
+    kv.set('lang', l).catch(() => {});
   }, []);
 
   const startCreate = useCallback(() => {
@@ -228,7 +242,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [native, detected, manual] = await Promise.all([
       adapter!.getBalance(address).catch(() => null),
       adapter!.getTokens(address).catch(() => []),
-      isEvm ? loadTokens(address, networkKey) : Promise.resolve([] as TokenInfo[]),
+      isEvm ? loadTokens(address, networkKey).catch(() => [] as TokenInfo[]) : Promise.resolve([] as TokenInfo[]),
     ]);
     const manualBalances = await Promise.allSettled(manual.map((token) => getTokenBalance(token, address, networkKey)));
     const list: TokenInfo[] = [];
@@ -291,7 +305,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 
   const estimateFee = useCallback(
-    (to: string, amount: string, token?: TokenInfo) => {
+    async (to: string, amount: string, token?: TokenInfo) => {
       if (!adapter) throw new Error('Network not ready');
       return adapter.estimateFee(address, to, amount, token);
     },
@@ -317,7 +331,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const value = useMemo<WalletContextValue>(
     () => ({
-      status, lang, t, setLang,
+      status, retryBoot, lang, t, setLang,
       draft, startCreate, startImport, finishSetup,
       unlock, unlockWithBiometrics, biometricsEnabled, biometricsAvailable, setBiometrics, lock, reset, getSecret,
       address, unsupported, networkKey, network, networks, switchNetwork, adapter,
@@ -325,7 +339,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       estimateFee, send,
     }),
     [
-      status, lang, t, setLang, draft, startCreate, startImport, finishSetup, unlock, unlockWithBiometrics,
+      status, retryBoot, lang, t, setLang, draft, startCreate, startImport, finishSetup, unlock, unlockWithBiometrics,
       biometricsEnabled, biometricsAvailable, setBiometrics, lock, reset, getSecret, address, unsupported, networkKey,
       network, networks, switchNetwork, adapter, balance, tokens, tokenBalances, refreshing, refresh, addToken,
       estimateFee, send,

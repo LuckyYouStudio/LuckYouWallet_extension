@@ -19,7 +19,7 @@ export function useAuthorize() {
             {
               text: t('verify'),
               onPress: async (password?: string) => {
-                const ok = !!password && (await vault.verifyPassword(password));
+                const ok = !!password && (await vault.verifyPassword(password).catch(() => false));
                 if (!ok) Alert.alert(t('wrongPassword'));
                 resolve(ok);
               },

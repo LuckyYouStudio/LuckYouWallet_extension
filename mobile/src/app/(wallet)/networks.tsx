@@ -1,8 +1,10 @@
 import React from 'react';
+import { Alert } from 'react-native';
 import { router } from 'expo-router';
 import { AppNetwork } from '@/chains';
 import { Avatar, Icon, ListItem, Screen, SectionTitle } from '@/components/ui';
 import { useWallet } from '@/state/WalletContext';
+import { errorMessage } from '@/lib/format';
 import { colors } from '@/theme';
 
 // 各链的代表色，用于网络头像
@@ -35,8 +37,12 @@ export default function Networks() {
               subtitle={net.symbol}
               right={net.key === networkKey ? <Icon name="checkmark.circle.fill" size={22} color={colors.primary} /> : null}
               onPress={async () => {
-                await switchNetwork(net.key);
-                router.back();
+                try {
+                  await switchNetwork(net.key);
+                  router.back();
+                } catch (e) {
+                  Alert.alert(t('somethingWrong'), errorMessage(e));
+                }
               }}
             />
           ))}

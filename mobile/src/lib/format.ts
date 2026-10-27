@@ -1,3 +1,9 @@
+/** 提取适合展示给用户的错误信息 */
+export const errorMessage = (e: unknown): string => {
+  const err = e as { shortMessage?: string; message?: string } | null;
+  return err?.shortMessage || err?.message || String(e);
+};
+
 export const shortAddress = (addr?: string) => (addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : '');
 
 export const formatAmount = (value: string, maxDecimals = 6) => {

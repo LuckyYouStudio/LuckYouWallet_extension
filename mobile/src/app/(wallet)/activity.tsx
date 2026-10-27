@@ -16,7 +16,7 @@ export default function Activity() {
 
   useFocusEffect(
     useCallback(() => {
-      loadHistory(address, networkKey).then(setRecords);
+      loadHistory(address, networkKey).then(setRecords).catch(() => setRecords([]));
     }, [address, networkKey]),
   );
 

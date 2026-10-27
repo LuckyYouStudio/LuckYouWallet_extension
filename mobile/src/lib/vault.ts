@@ -2,6 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as Crypto from 'expo-crypto';
 import { pbkdf2, hexlify, toUtf8Bytes } from 'ethers';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { kv } from './storage';
 import type { ChainAccounts } from '@/chains';
 
@@ -38,10 +39,13 @@ function hashPassword(password: string, salt: string, iterations: number): strin
   return pbkdf2(toUtf8Bytes(password), salt, iterations, 32, 'sha256');
 }
 
-/** iOS 卸载 App 后 Keychain 可能残留，首次启动时清理旧数据 */
+/**
+ * iOS 卸载 App 后 Keychain 可能残留，首次启动时清理旧数据。
+ * 只有标记确实不存在才视为新安装；读取出错会抛出，绝不在不确定时清空钱包
+ */
 export async function ensureFreshInstall(): Promise<void> {
-  const installed = await kv.get<boolean>(INSTALLED_KEY);
-  if (!installed) {
+  const raw = await AsyncStorage.getItem(INSTALLED_KEY);
+  if (raw === null) {
     await wipeSecrets();
     await kv.set(INSTALLED_KEY, true);
   }

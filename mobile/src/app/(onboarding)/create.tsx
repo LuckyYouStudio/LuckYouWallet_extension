@@ -14,7 +14,7 @@ export default function CreateWallet() {
 
   return (
     <Screen
-      footer={<Button title={t('continue')} disabled={!revealed || !confirmed} onPress={() => router.push('/password')} />}
+      footer={<Button title={t('continue')} disabled={!revealed || !confirmed} onPress={() => router.push('/verify')} />}
     >
       <Text style={styles.title}>{t('backupTitle')}</Text>
       <Alert tone="warning">{t('backupWarning')}</Alert>

@@ -74,6 +74,14 @@ npx expo lint
 npx expo-doctor
 ```
 
+### Release config already in place
+- **Privacy manifest** (`ios.privacyManifests` in `app.json`): no tracking, no data collected, plus declarations for the system APIs React Native uses.
+- **Export compliance**: `ITSAppUsesNonExemptEncryption = false` (only standard algorithms for signing/hashing; no proprietary encryption).
+- **Home-screen name** "LuckYou"; the Face ID prompt has Chinese/English localization (`locales/`).
+- **Release builds** disable `console.log/info/debug`, so addresses and other details don't reach the system log.
+- **Backup verification**: after creating a wallet, the user must pick 3 random words of the recovery phrase correctly before setting a password.
+- **Error fallback**: if reading the Keychain fails at startup, a retry screen appears (it never assumes there's no wallet, so an existing wallet can't be overwritten); render errors show a recoverable error screen.
+
 ## Releasing to the App Store
 
 1. **Prerequisites**

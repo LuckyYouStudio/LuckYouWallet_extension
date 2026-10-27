@@ -6,6 +6,7 @@ import * as Haptics from 'expo-haptics';
 import { Button, Field } from '@/components/ui';
 import { Logo } from '@/components/Logo';
 import { useWallet } from '@/state/WalletContext';
+import { errorMessage } from '@/lib/format';
 import { colors } from '@/theme';
 
 export default function Unlock() {
@@ -21,19 +22,21 @@ export default function Unlock() {
   const submit = () => {
     setBusy(true);
     setTimeout(async () => {
-      const ok = await unlock(password);
-      if (!ok) {
+      try {
+        if (await unlock(password)) return;
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         setError(t('wrongPassword'));
-        setBusy(false);
+      } catch (e) {
+        setError(errorMessage(e));
       }
+      setBusy(false);
     }, 30);
   };
 
   const confirmReset = () =>
     Alert.alert(t('resetTitle'), t('resetBody'), [
       { text: t('cancel'), style: 'cancel' },
-      { text: t('reset'), style: 'destructive', onPress: reset },
+      { text: t('reset'), style: 'destructive', onPress: () => reset().catch((e) => Alert.alert(t('somethingWrong'), errorMessage(e))) },
     ]);
 
   return (

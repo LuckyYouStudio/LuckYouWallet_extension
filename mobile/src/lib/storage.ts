@@ -5,7 +5,13 @@ import { configureStorage, KeyValueStorage, NetworkKey, TokenInfo, TransactionRe
 const asyncStorage: KeyValueStorage = {
   async get(key) {
     const raw = await AsyncStorage.getItem(key);
-    return raw == null ? undefined : JSON.parse(raw);
+    if (raw == null) return undefined;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // 本地数据损坏时当作不存在，避免整个页面崩溃
+      return undefined;
+    }
   },
   async set(key, value) {
     await AsyncStorage.setItem(key, JSON.stringify(value));

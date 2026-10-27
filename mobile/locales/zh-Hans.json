@@ -1,0 +1,6 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "LuckYou",
+    "NSFaceIDUsageDescription": "使用面容 ID 解锁钱包并确认交易。"
+  }
+}

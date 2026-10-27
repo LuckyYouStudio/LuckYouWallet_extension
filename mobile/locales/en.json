@@ -1,0 +1,6 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "LuckYou",
+    "NSFaceIDUsageDescription": "Use Face ID to unlock your wallet and approve transactions."
+  }
+}
